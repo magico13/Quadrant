@@ -74,6 +74,8 @@ class HexGrid {
         this.highlightHexes = new Set();
         this.selectedShipId = null;
         this.targets = new Map(); // id -> hitChance (percent) for valid gunnery targets
+        this.ghost = null;        // {q, r, facing, teamId, name} — translucent preview ship
+        this.path = null;         // [{q, r}, ...] — hex route of the previewed move
         this.onHexClick = null;   // callback (q, r) => void
         this.onShipClick = null;  // callback (ship) => void — takes priority over onHexClick
         this.onShipHover = null;  // callback (ship | null) => void
@@ -220,6 +222,10 @@ class HexGrid {
     setSelected(id) { this.selectedShipId = id; this.draw(); }
     // Map of shipId -> hitChance percent for valid gunnery targets.
     setTargets(targets) { this.targets = new Map(targets); this.draw(); }
+    // Translucent preview ship (helm move confirmation). Pass null to clear.
+    setGhost(ghost) { this.ghost = ghost; this.draw(); }
+    // Hex route of the previewed move, drawn as a line through hex centers. Pass null to clear.
+    setPath(hexes) { this.path = hexes && hexes.length ? hexes : null; this.draw(); }
 
     draw() {
         const ctx = this.ctx;
@@ -275,6 +281,34 @@ class HexGrid {
         for (const ship of this.ships) {
             const p = this._pixel(ship.q, ship.r);
             this._drawShip(p.x, p.y, ship);
+        }
+
+        // Movement path: a dashed line through the hex centers of the previewed route.
+        if (this.path && this.path.length > 1) {
+            const color = this.ghost?.teamId === 0 ? '#4fc3f7' : '#ff7043';
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2 / this.zoom;
+            ctx.setLineDash([6, 5]);
+            ctx.globalAlpha = 0.8;
+            ctx.beginPath();
+            const start = this._pixel(this.path[0].q, this.path[0].r);
+            ctx.moveTo(start.x, start.y);
+            for (let i = 1; i < this.path.length; i++) {
+                const p = this._pixel(this.path[i].q, this.path[i].r);
+                ctx.lineTo(p.x, p.y);
+            }
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        // Ghost preview ship on top (helm move confirmation).
+        if (this.ghost) {
+            const gp = this._pixel(this.ghost.q, this.ghost.r);
+            ctx.save();
+            ctx.globalAlpha = 0.5;
+            this._drawShip(gp.x, gp.y, this.ghost);
+            ctx.restore();
         }
 
         ctx.restore();

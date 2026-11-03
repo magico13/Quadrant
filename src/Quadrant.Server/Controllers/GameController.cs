@@ -39,7 +39,7 @@ public class GameController : ControllerBase
         // Phase-specific helper data for the client UI.
         object? options = null;
         if (state.Phase == CombatPhase.Helm && state.CurrentActor is not null)
-            options = new { type = "moves", items = engine.GetValidMoves().Select(m => new { position = new { q = m.Position.Q, r = m.Position.R }, finalFacing = (int)m.FinalFacing }) };
+            options = new { type = "moves", items = engine.GetValidMoves().Select(m => new { position = new { q = m.Position.Q, r = m.Position.R }, finalFacing = (int)m.FinalFacing, path = m.Path.Select(h => new { q = h.Position.Q, r = h.Position.R }).ToList() }) };
         else if (state.Phase == CombatPhase.Gunnery && state.CurrentActor is not null)
             options = new { type = "targets", items = engine.GetValidTargets() };
 
@@ -140,6 +140,19 @@ public class GameController : ControllerBase
         return Ok(new { ok = true });
     }
 
+    /// <summary>Helm: Turn In Place stunt — ship stays put but faces a new direction.</summary>
+    [HttpPost("{roomCode}/turn-in-place")]
+    public IActionResult TurnInPlace(string roomCode, [FromBody] TurnInPlaceRequest req)
+    {
+        var session = _sessions.Get(roomCode);
+        if (session is null) return NotFound(new { error = "Game not found." });
+
+        var result = session.Engine.TryTurnInPlace((Facing)req.Facing);
+        return result.IsValid
+            ? Ok(new { ok = true })
+            : BadRequest(new { error = result.Error });
+    }
+
     /// <summary>Gunnery: fire the current actor's weapons at chosen targets.</summary>
     [HttpPost("{roomCode}/fire")]
     public IActionResult Fire(string roomCode, [FromBody] FireRequest req)
@@ -166,5 +179,6 @@ public class GameController : ControllerBase
 
 public sealed record EngineeringRequest(string ShipId, int Amount);
 public sealed record MoveRequest(int Q, int R, int Facing);
+public sealed record TurnInPlaceRequest(int Facing);
 public sealed record FireRequest(List<Shot> Shots);
 public sealed record Shot(string WeaponName, string TargetShipId);

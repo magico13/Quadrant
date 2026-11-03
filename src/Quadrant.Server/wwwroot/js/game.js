@@ -17,6 +17,7 @@ let state = null;          // last fetched game state
 let selectedShots = new Map(); // gunnery: weaponName → targetShipId (one target per weapon)
 let activeWeapon = null;   // currently selected weapon in gunnery targeting
 let detailsShipId = null;  // ship currently shown in the details panel
+let pendingMove = null;    // helm: { option, actorId } — move previewed, awaiting confirmation
 let refreshGunnery = null; // module-scope handle to the current gunnery refresh fn
 
 // ────────────────────────────────────────────────
@@ -83,6 +84,13 @@ function render() {
     if (detailsShipId) {
         const s = state.ships.find(x => x.id === detailsShipId);
         if (s) showShipDetails(s); else hideShipDetails();
+    }
+
+    // A helm preview only survives within the same actor's turn.
+    if (pendingMove && (state.phase !== 'Helm' || pendingMove.actorId !== state.currentActorId)) {
+        pendingMove = null;
+        grid.setGhost(null);
+        grid.setPath(null);
     }
 
     switch (state.phase) {
@@ -153,27 +161,68 @@ function renderEngineering() {
 // ── Helm ──
 function renderHelm() {
     const actor = currentActor();
-    if (!actor) { grid.setHighlights([]); grid.setTargets([]); actionPanel.innerHTML = ''; return; }
+    if (!actor) { grid.setHighlights([]); grid.setTargets([]); grid.setGhost(null); grid.setPath(null); actionPanel.innerHTML = ''; return; }
 
     // Highlight every reachable hex (union over facings).
     grid.setHighlights((state.options?.items || []).map(m => m.position));
     grid.setTargets([]);
 
+    const facingNames = ['NW', 'NE', 'E', 'SE', 'SW', 'W'];
+    const pending = pendingMove?.option;
     actionPanel.innerHTML = `
         <div class="actor-name p${actor.teamId + 1}">${actor.name}</div>
-        <div class="hint">Click a highlighted hex to move there. Click your own ship to turn in place. If several facings are possible, you'll be asked which.</div>
-        <button class="btn btn-ghost" id="btn-hold">Hold Position</button>`;
+        ${pending
+            ? `<div class="hint">Moving to (${pending.position.q}, ${pending.position.r}), facing ${facingNames[pending.finalFacing]}. Click another hex to change, or confirm.</div>
+               <button class="btn btn-primary" id="btn-confirm-move">Confirm Move</button>
+               <button class="btn btn-ghost" id="btn-cancel-move">Cancel</button>`
+            : `<div class="hint">Click a highlighted hex to preview a move. Click your own ship to turn in place. If several facings are possible, you'll be asked which.</div>
+               <button class="btn btn-ghost" id="btn-hold">Hold Position</button>`}`;
 
-    document.getElementById('btn-hold').addEventListener('click', async () => {
-        await api(`/${roomCode}/skip-move`);
+    if (pending) {
+        document.getElementById('btn-confirm-move').addEventListener('click', confirmMove);
+        document.getElementById('btn-cancel-move').addEventListener('click', () => setPendingMove(null));
+    } else {
+        document.getElementById('btn-hold').addEventListener('click', async () => {
+            await api(`/${roomCode}/skip-move`);
+            await fetchState();
+        });
+    }
+}
+
+// Preview (or clear) a helm move. The ghost ship shows where the actor would end up.
+function setPendingMove(m) {
+    const actor = currentActor();
+    pendingMove = m && actor ? { option: m, actorId: actor.id } : null;
+    grid.setGhost(pendingMove
+        ? { q: m.position.q, r: m.position.r, facing: m.finalFacing, teamId: actor.teamId, name: actor.name }
+        : null);
+    grid.setPath(pendingMove ? m.path : null);
+    renderHelm();
+}
+
+async function confirmMove() {
+    const m = pendingMove?.option;
+    if (!m) return;
+    try {
+        await api(`/${roomCode}/move`, { q: m.position.q, r: m.position.r, facing: m.finalFacing });
+        pendingMove = null;
+        grid.setGhost(null);
+        grid.setPath(null);
         await fetchState();
-    });
+    } catch (err) {
+        addLog('error', `Move failed: ${err.message}`);
+    }
 }
 
 // ── Gunnery ──
 function renderGunnery() {
     const actor = currentActor();
     if (!actor) { grid.setHighlights([]); grid.setTargets([]); actionPanel.innerHTML = ''; return; }
+
+    // Clear any Helm-phase highlights/path/ghost.
+    grid.setHighlights([]);
+    grid.setPath(null);
+    grid.setGhost(null);
 
     // Reset selection when the actor changes.
     selectedShots.clear();
@@ -338,14 +387,10 @@ grid.onShipHover = (ship, x, y) => {
 grid.onShipClick = (ship) => {
     if (!state || state.isComplete) return;
 
-    // During Helm, clicking your own ship turns in place: offer the facings
-    // reachable at the current hex (the engine already allows staying put).
+    // During Helm, clicking your own ship offers the Turn In Place stunt.
     if (state.phase === 'Helm' && ship.id === state.currentActorId) {
-        const options = state.options?.items || [];
-        const here = options.filter(m => m.position.q === ship.q && m.position.r === ship.r);
-        if (here.length > 1) showFacingPicker(here);
-        else if (here.length === 1) doMove(here[0]);
-        return; // no turn available → don't fall through to details
+        showTurnInPlacePicker(ship);
+        return;
     }
 
     // During Gunnery with a weapon selected, clicking an enemy targets it.
@@ -369,16 +414,18 @@ grid.onShipClick = (ship) => {
 //  Hex click handling (phase-aware)
 // ────────────────────────────────────────────────
 
-grid.onHexClick = async (q, r) => {
+grid.onHexClick = (q, r) => {
     if (!state || state.isComplete) return;
 
     if (state.phase === 'Helm') {
         const options = state.options?.items || [];
         const matches = options.filter(m => m.position.q === q && m.position.r === r);
-        if (matches.length === 0) return; // not a valid destination
+        if (matches.length === 0) { setPendingMove(null); return; } // empty hex → clear preview
 
         if (matches.length === 1) {
-            await doMove(matches[0]);
+            // Clicking the previewed hex again cancels it.
+            const same = pendingMove && matches[0].finalFacing === pendingMove.option.finalFacing;
+            setPendingMove(same ? null : matches[0]);
         } else {
             showFacingPicker(matches);
         }
@@ -390,15 +437,15 @@ function showFacingPicker(matches) {
     const overlay = document.createElement('div');
     overlay.className = 'facing-picker';
     overlay.innerHTML = `
-        <div class="facing-picker-title">Choose facing:</div>
+        <div class="facing-picker-title">Choose facing (preview, then confirm):</div>
         ${matches.map((m, i) => `<button class="btn btn-primary facing-btn" data-idx="${i}">${names[m.finalFacing]}</button>`).join('')}`;
     document.body.appendChild(overlay);
 
     overlay.querySelectorAll('.facing-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
+        btn.addEventListener('click', () => {
             const idx = parseInt(btn.dataset.idx, 10);
             overlay.remove();
-            await doMove(matches[idx]);
+            setPendingMove(matches[idx]);
         });
     });
 
@@ -408,13 +455,32 @@ function showFacingPicker(matches) {
     });
 }
 
-async function doMove(m) {
-    try {
-        await api(`/${roomCode}/move`, { q: m.position.q, r: m.position.r, facing: m.finalFacing });
-        await fetchState();
-    } catch (err) {
-        addLog('error', `Move failed: ${err.message}`);
-    }
+async function showTurnInPlacePicker(ship) {
+    const names = ['NW', 'NE', 'E', 'SE', 'SW', 'W'];
+    const overlay = document.createElement('div');
+    overlay.className = 'facing-picker';
+    overlay.innerHTML = `
+        <div class="facing-picker-title">Turn In Place (stunt):</div>
+        ${names.map((n, i) => `<button class="btn btn-primary facing-btn" data-f="${i}">${n}</button>`).join('')}`;
+    document.body.appendChild(overlay);
+
+    overlay.querySelectorAll('.facing-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const facing = parseInt(btn.dataset.f, 10);
+            overlay.remove();
+            try {
+                await api(`/${roomCode}/turn-in-place`, { facing });
+                await fetchState();
+            } catch (err) {
+                addLog('error', err.message);
+            }
+        });
+    });
+
+    // Click outside to dismiss
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) overlay.remove();
+    });
 }
 
 // ────────────────────────────────────────────────

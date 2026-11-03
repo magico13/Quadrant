@@ -161,6 +161,24 @@ public sealed class CombatEngine
         AdvanceActor();
     }
 
+    /// <summary>
+    /// Turn In Place stunt: the ship does not move but turns to face any direction.
+    /// Clumsy ships take –4 AC/TL; poor ships take –2 AC/TL until next round.
+    /// This replaces ordinary movement for the round.
+    /// </summary>
+    public MoveValidationResult TryTurnInPlace(Facing facing)
+    {
+        var ship = _state.CurrentActor;
+        if (ship is null || _state.Phase != CombatPhase.Helm)
+            return MoveValidationResult.Fail("No ship to move.");
+
+        ship.Facing = facing;
+        ship.TurnedInPlaceThisRound = true;
+        LastEvents.Add(new CombatEvent("Helm", ship.InstanceId, $"{ship.Name} turns in place to face {facing}."));
+        AdvanceActor();
+        return MoveValidationResult.Ok(ship.Position, facing);
+    }
+
     // ────────────────────────────────────────────────
     //  Gunnery phase: firing
     // ────────────────────────────────────────────────
@@ -266,15 +284,18 @@ public sealed class CombatEngine
     // ────────────────────────────────────────────────
 
     /// <summary>A valid destination for the current actor's helm move.</summary>
-    public sealed record MoveOption(Hex Position, Facing FinalFacing);
+    /// <param name="Path">The hexes the ship travels through, from its start hex to <see cref="Position"/>.</param>
+    public sealed record PathStep(Hex Position, Facing Facing);
+    public sealed record MoveOption(Hex Position, Facing FinalFacing, IReadOnlyList<PathStep> Path);
 
     /// <summary>
-    /// Computes all reachable (position, facing) outcomes for the current actor's movement.
+    /// Computes all reachable (position, facing) outcomes for the current actor's movement,
+    /// along with a representative route (the shortest hex path) for each outcome.
     /// BFS over (position, facing, remaining-movement, hexes-since-last-turn) states,
     /// enforcing speed, distance-between-turns, grid bounds, and no ending on an occupied hex.
     /// Passing through occupied hexes is allowed; only the final position must be clear.
     /// </summary>
-    private HashSet<(Hex Pos, Facing Facing)> _ComputeReachable()
+    private Dictionary<(Hex Pos, Facing Facing), List<PathStep>> _ComputeReachable()
     {
         var ship = _state.CurrentActor;
         if (ship is null || _state.Phase != CombatPhase.Helm) return new();
@@ -285,45 +306,88 @@ public sealed class CombatEngine
             .Where(s => s.InstanceId != ship.InstanceId && !s.IsDestroyed)
             .Select(s => s.Position));
 
-        var visited = new HashSet<(Hex, Facing, int)>();
-        var reachable = new HashSet<(Hex, Facing)>();
-        var queue = new Queue<(Hex Pos, Facing Facing, int Remaining, int SinceTurn)>();
-        queue.Enqueue((ship.Position, ship.Facing, speed, 0));
-        visited.Add((ship.Position, ship.Facing, 0));
+        // BFS state is (pos, facing, sinceTurn, consecutiveTurns); remaining movement rides along.
+        // maxConsecutiveTurns: perfect maneuverability allows 2 turns at a single point; others allow 1.
+        int maxConsecutiveTurns = minBetweenTurns == 0 ? 2 : 1;
+
+        var visited = new HashSet<(Hex, Facing, int, int)>();
+        var parent = new Dictionary<(Hex, Facing, int, int), (Hex, Facing, int, int)?>();
+        var queue = new Queue<(Hex Pos, Facing Facing, int Remaining, int SinceTurn, int ConsecTurns)>();
+
+        // Seed sinceTurn = 0: you must move minBetweenTurns hexes before your first turn.
+        // Turning without moving is only possible via the Turn In Place stunt (separate action).
+        var seed = (ship.Position, ship.Facing, 0, 0);
+        queue.Enqueue((ship.Position, ship.Facing, speed, 0, 0));
+        visited.Add(seed);
+        parent[seed] = null;
 
         while (queue.Count > 0)
         {
-            var (pos, facing, remaining, sinceTurn) = queue.Dequeue();
-
-            if (!occupied.Contains(pos))
-                reachable.Add((pos, facing));
-
-            if (remaining <= 0) continue;
+            var (pos, facing, remaining, sinceTurn, consecTurns) = queue.Dequeue();
+            var stateKey = (pos, facing, sinceTurn, consecTurns);
 
             // Move forward one hex in the current facing.
-            var nextPos = pos.Neighbor((int)facing);
-            int ns = sinceTurn + 1;
-            if (visited.Add((nextPos, facing, ns)))
-                queue.Enqueue((nextPos, facing, remaining - 1, ns));
-
-            // Turn in place (only after traveling enough since the last turn).
-            if (minBetweenTurns == 0 || sinceTurn >= minBetweenTurns)
+            if (remaining > 0)
             {
-                for (int d = 1; d < 6; d++)
+                var nextPos = pos.Neighbor((int)facing);
+                int ns = sinceTurn + 1;
+                var nextKey = (nextPos, facing, ns, 0);
+                if (visited.Add(nextKey))
                 {
-                    var nf = (Facing)(((int)facing + d) % 6);
-                    if (visited.Add((pos, nf, 0)))
-                        queue.Enqueue((pos, nf, remaining, 0));
+                    parent[nextKey] = stateKey;
+                    queue.Enqueue((nextPos, facing, remaining - 1, ns, 0));
+                }
+            }
+
+            // Turn in place: ±60°, gated by distance-between-turns and consecutive-turn cap.
+            if (consecTurns < maxConsecutiveTurns && (minBetweenTurns == 0 || sinceTurn >= minBetweenTurns))
+            {
+                foreach (var d in new[] { 1, -1 })
+                {
+                    var nf = (Facing)(((int)facing + d + 6) % 6);
+                    var turnKey = (pos, nf, 0, consecTurns + 1);
+                    if (visited.Add(turnKey))
+                    {
+                        parent[turnKey] = stateKey;
+                        queue.Enqueue((pos, nf, remaining, 0, consecTurns + 1));
+                    }
                 }
             }
         }
 
-        return reachable;
+        // For each reachable (pos, facing) outcome, keep the shortest route that reaches it.
+        // Each step records the hex AND the facing while on it, so in-place turns are preserved
+        // and the client can render where the ship turned.
+        var result = new Dictionary<(Hex Pos, Facing Facing), List<PathStep>>();
+        foreach (var stateKey in parent.Keys)
+        {
+            var (pos, facing, _, _) = stateKey;
+            if (occupied.Contains(pos)) continue; // can't end on an occupied hex
+
+            // Walk the parent chain back to the seed to get the route.
+            var raw = new List<(Hex Pos, Facing Facing)>();
+            (Hex, Facing, int, int)? cur = stateKey;
+            while (cur != null)
+            {
+                raw.Add((cur.Value.Item1, cur.Value.Item2));
+                cur = parent[cur.Value];
+            }
+            raw.Reverse();
+
+            var path = new List<PathStep>(raw.Count);
+            foreach (var (p, f) in raw)
+                path.Add(new PathStep(p, f));
+
+            if (!result.TryGetValue((pos, facing), out var existing) || path.Count < existing.Count)
+                result[(pos, facing)] = path;
+        }
+
+        return result;
     }
 
-    /// <summary>All valid (position, facing) outcomes for the current actor's helm move.</summary>
+    /// <summary>All valid (position, facing) outcomes for the current actor's helm move, with routes.</summary>
     public List<MoveOption> GetValidMoves()
-        => _ComputeReachable().Select(s => new MoveOption(s.Pos, s.Facing)).ToList();
+        => _ComputeReachable().Select(kv => new MoveOption(kv.Key.Pos, kv.Key.Facing, kv.Value)).ToList();
 
     /// <summary>
     /// Moves the current actor to a specific (position, facing) if it is reachable.
@@ -335,7 +399,7 @@ public sealed class CombatEngine
         if (ship is null || _state.Phase != CombatPhase.Helm)
             return MoveValidationResult.Fail("No ship to move.");
 
-        if (!_ComputeReachable().Contains((position, facing)))
+        if (!_ComputeReachable().ContainsKey((position, facing)))
             return MoveValidationResult.Fail("That hex/facing is not reachable with this ship's movement.");
 
         ship.Position = position;

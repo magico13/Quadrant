@@ -1,7 +1,24 @@
 # Quadrant — Starfinder Starship Combat Game
 
+## Running the Server (Docker)
+Server runs in Docker so it can stay up in the background without confusing the agent harness. `wwwroot` is bind-mounted, so UI edits are picked up on browser refresh — no rebuild needed for client changes.
+
+```bash
+docker compose up -d --build   # build + start (rebuild only after C# changes)
+curl http://localhost:5180/api/health
+docker logs -f quadrant-server  # tail logs
+docker compose restart server   # restart
+docker compose down             # stop
+```
+
+Server listens on port **5180**. No persistent state yet (ships are static in `ShipCatalog`, sessions in memory) — add a volume for the `.db` file when SQLite persistence lands.
+
 ## TODO — Next Up
-- [ ] **Movement confirmation step (client).** Movement should require a separate confirm action so you can preview/undo your move until you confirm — lets you experiment with facings and different destinations without locking them in, and guards against misclicks. Currently `doMove()` POSTs to `/{room}/move` immediately on hex/facing selection.
+- [x] **Movement confirmation step (client).** Done — Helm moves now preview first: clicking a reachable hex (or your own ship) shows a translucent **ghost ship** at the destination and a "Confirm Move / Cancel" panel instead of moving immediately. You can re-target, change facing, or cancel freely; only Confirm POSTs to `/{room}/move`. Implemented in `game.js` (`pendingMove`, `setPendingMove()`, `confirmMove()`) + `hex.js` (`setGhost()`).
+- [x] **Turn In Place stunt.** Done — Clicking your own ship during Helm shows a facing picker for the Turn In Place stunt (CRB pg. 324). The ship stays in place but can face any direction. Clumsy ships take –4 AC/TL, poor take –2 until next round. Engine: `TryTurnInPlace(Facing)` in `CombatEngine.cs`. Server: `POST /{room}/turn-in-place`. Client: `showTurnInPlacePicker()` in `game.js`.
+- [x] **BFS turn rules fix.** Done — Seed `sinceTurn = 0` means you must move `minBetweenTurns` hexes before your first turn (the rule constrains gaps *between* turns, not the first one). Perfect ships can turn at any point including in place (normal movement, no penalty). Consecutive turn cap: perfect = 2, others = 1.
+- [x] **Stale highlights on phase change.** Done — `renderGunnery()` now clears Helm-phase highlights, path, and ghost when entering Gunnery.
+- [ ] **Weapon-arc hex highlighting (client).** When a weapon is selected during Gunnery, highlight all hexes within range AND in the weapon's arc from the current actor's position/facing. Computed client-side from ship position + facing + weapon arc/range data already in state.
 - [ ] **Range-based attack penalty.** Verify whether Starfinder applies a penalty to attacks based on range (longer shots) and whether the engine accounts for it. Check the hit-chance calc in `CombatEngine.GetValidTargets` / gunnery targeting against the rules. (The Rules Reference below already lists "− range penalty" in the Gunnery Check line, so this is likely intended but may not be implemented.)
 
 ## Concept
@@ -54,7 +71,7 @@ Game Server (ASP.NET Core + SignalR)
 | Hotseat | Single screen, alternating control, both players see all rolls |
 
 ### Out (Deferred)
-- Stunts (Back Off, Barrel Roll, Evade, Flip and Burn, Flyby, Slide, Turn in Place)
+- Stunts (Back Off, Barrel Roll, Evade, Flip and Burn, Flyby, Slide) — Turn In Place is done
 - Captain / Science Officer actions
 - Tracking weapon projectiles (missiles)
 - Crew damage
