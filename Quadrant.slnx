@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Quadrant.RulesEngine/Quadrant.RulesEngine.csproj" />
+    <Project Path="src/Quadrant.Server/Quadrant.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Quadrant.RulesEngine.Tests/Quadrant.RulesEngine.Tests.csproj" />
+  </Folder>
+</Solution>
