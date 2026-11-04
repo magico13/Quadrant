@@ -1,0 +1,13 @@
+{
+  "id": "gravity-cannon",
+  "name": "Gravity Cannon",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "2d6x10",
+  "pcu": 40,
+  "cost": 50,
+  "special": [
+    "Tractor Beam"
+  ]
+}

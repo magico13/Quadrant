@@ -23,7 +23,7 @@ The server must be running (`docker compose up -d --build`), reachable at
   (`hex_distance`, `direction_to`) that mirror the rules engine.
 
 - **`setup_gunnery.py`** — starts a fresh game, ends Engineering, and plays the
-  Helm phase until Pegasus is two hexes in front of Gorgon facing it, landing
+  Helm phase, moving Pegasus as close to Gorgon as its legal moves allow, landing
   the game in Gunnery. Prints the room code and a `URL=` line you can open in a
   browser.
 
@@ -39,7 +39,7 @@ The server must be running (`docker compose up -d --build`), reachable at
 Ship action order is randomized each round by piloting rolls, so a script cannot
 assume who moves first. `setup_gunnery.py` instead loops over the Helm phase,
 reading `currentActorId` from state on every iteration: when Pegasus is up it
-moves into position; everyone else skips. The loop exits as soon as the phase
+moves toward Gorgon; everyone else skips. Random starting positions may prevent Pegasus from reaching firing position in one round. The loop exits as soon as the phase
 advances to Gunnery.
 
 ### Getting a specific ship's gunnery turn
@@ -54,7 +54,7 @@ room = "3MM7YY"
 for _ in range(6):
     st = c.state(room)
     if st["phase"] != "Gunnery": break
-    if st.get("currentActorId") == "p1-1":   # Pegasus
+    if st.get("currentActorId") == next(s["id"] for s in st["ships"] if s["name"] == "Pegasus"):
         break
     c.skip_fire(room)
 ```

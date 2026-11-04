@@ -1,0 +1,37 @@
+{
+  "id": "gorgon",
+  "name": "Gorgon",
+  "tier": 2,
+  "source": "Society Guide v7.02 pg. 8",
+  "type": "Large destroyer",
+  "speed": 4,
+  "maneuverability": "average",
+  "distanceBetweenTurns": 2,
+  "drift": null,
+  "ac": 10,
+  "tl": 10,
+  "hp": 150,
+  "dt": null,
+  "ct": 30,
+  "shields": {
+    "type": "standard",
+    "total": 20,
+    "forward": 5,
+    "port": 5,
+    "starboard": 5,
+    "aft": 5
+  },
+  "weapons": [
+    {
+      "weaponId": "heavy-laser-cannon",
+      "arc": "forward"
+    }
+  ],
+  "powerCore": null,
+  "driftEngine": null,
+  "systems": [],
+  "expansionBays": [],
+  "modifiers": {},
+  "complement": null,
+  "crew": []
+}

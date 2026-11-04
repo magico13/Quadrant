@@ -48,18 +48,129 @@ async function fetchState() {
 // ────────────────────────────────────────────────
 
 async function newGame() {
-    const res = await api('/start', { p1: 'Player 1', p2: 'Player 2' });
+    // Opening a fresh game goes through the fleet setup overlay first.
+    showSetup();
+}
+
+// Actually create the game on the server with the chosen fleet (or defaults).
+async function launchGame(selections) {
+    const res = await api('/start', { selections });
     roomCode = res.roomCode;
     selectedShots.clear();
     activeWeapon = null;
     detailsShipId = null;
     hideShipDetails();
     logEl.innerHTML = '';
+    hideSetup();
+    history.replaceState(null, '', `/${roomCode}`);
     await fetchState();
 }
 
 document.getElementById('btn-new-game').addEventListener('click', () => {
     newGame().catch(err => addLog('error', `Failed to start game: ${err.message}`));
+});
+
+// ────────────────────────────────────────────────
+//  Fleet setup overlay
+// ────────────────────────────────────────────────
+
+let catalog = [];            // ship definitions from /catalog
+let fleet = [[], []]; // one array of ship IDs per team
+
+const setupOverlay = document.getElementById('setup-overlay');
+const catalogListEl = document.getElementById('catalog-list');
+const launchBtn = document.getElementById('btn-setup-launch');
+
+async function showSetup() {
+    fleet = [[], []];
+    try {
+        catalog = await api('/catalog', null, 'GET');
+    } catch (err) {
+        addLog('error', `Could not load ship catalog: ${err.message}`);
+        return;
+    }
+    renderCatalogList();
+    renderTeamColumns();
+    setupOverlay.classList.remove('hidden');
+}
+
+function hideSetup() {
+    setupOverlay.classList.add('hidden');
+}
+
+function renderCatalogList() {
+    catalogListEl.innerHTML = catalog.map(s => `
+        <div class="catalog-card">
+            <div class="cc-top">
+                <span class="cc-name">${s.name}</span>
+                <span class="cc-tier">Tier ${s.tier}</span>
+            </div>
+            <div class="cc-stats">SPD ${s.speed} · HP ${s.hullPoints} · AC ${s.ac} · ${s.maneuverability}</div>
+            <div class="cc-weapons">${s.weapons.map(w => `${w.name} (${w.arc})`).join(', ') || 'no weapons'}</div>
+            <div class="cc-add">
+                ${fleet.map((_, team) => `<button data-team="${team}" data-ship="${s.id}" style="color:${teamColor(team)}">+ Team ${team + 1}</button>`).join('')}
+            </div>
+        </div>`).join('');
+
+    catalogListEl.querySelectorAll('.cc-add button').forEach(btn => {
+        btn.addEventListener('click', () => {
+            addToFleet(parseInt(btn.dataset.team, 10), btn.dataset.ship);
+        });
+    });
+}
+
+function renderTeamColumns() {
+    document.getElementById('team-list').innerHTML = fleet.map((ships, team) => `
+        <div class="team-col">
+            <h3><span class="roster-dot" style="background:${teamColor(team)}"></span> Team ${team + 1}
+                ${team >= 2 ? `<button class="ts-remove" data-remove-team="${team}" title="Remove team">×</button>` : ''}
+            </h3>
+            <div class="team-ships">${ships.length ? ships.map((id, i) => {
+                const ship = catalog.find(c => c.id === id);
+                return `<div class="team-ship-row"><span class="ts-name">${ship ? ship.name : id}</span>
+                    <button class="ts-remove" data-team="${team}" data-idx="${i}" title="Remove ship">×</button></div>`;
+            }).join('') : '<div class="hint">No ships yet</div>'}</div>
+        </div>`).join('');
+    document.querySelectorAll('.ts-remove[data-idx]').forEach(btn => btn.addEventListener('click', () => {
+        fleet[Number(btn.dataset.team)].splice(Number(btn.dataset.idx), 1);
+        renderTeamColumns();
+    }));
+    document.querySelectorAll('[data-remove-team]').forEach(btn => btn.addEventListener('click', () => {
+        fleet.splice(Number(btn.dataset.removeTeam), 1);
+        renderCatalogList();
+        renderTeamColumns();
+    }));
+    document.getElementById('btn-add-team').disabled = fleet.length >= 5;
+    launchBtn.disabled = fleet.some(ships => ships.length === 0);
+}
+
+function addToFleet(teamId, shipId) {
+    fleet[teamId].push(shipId);
+    renderTeamColumns();
+}
+
+document.getElementById('btn-add-team').addEventListener('click', () => {
+    if (fleet.length >= 5) return;
+    fleet.push([]);
+    renderCatalogList();
+    renderTeamColumns();
+});
+
+// Flatten the per-team arrays into the [{shipId, teamId}] shape the API expects.
+function buildSelections() {
+    const sel = [];
+    for (let team = 0; team < fleet.length; team++)
+        for (const shipId of fleet[team])
+            sel.push({ shipId, teamId: team });
+    return sel;
+}
+
+launchBtn.addEventListener('click', () => {
+    launchGame(buildSelections()).catch(err => addLog('error', `Failed to start game: ${err.message}`));
+});
+
+document.getElementById('btn-setup-defaults').addEventListener('click', () => {
+    launchGame([]).catch(err => addLog('error', `Failed to start game: ${err.message}`));
 });
 
 // ────────────────────────────────────────────────
@@ -115,13 +226,12 @@ function renderRoster() {
     if (!state || !state.ships) { rosterEl.innerHTML = ''; return; }
     const isCombat = ['Engineering', 'Helm', 'Gunnery'].includes(state.phase);
     rosterEl.innerHTML = state.ships.map(s => {
-        const teamCls = s.teamId === 0 ? 'p1' : 'p2';
         const active = s.id === state.currentActorId ? ' active' : '';
         const selected = s.id === detailsShipId ? ' selected' : '';
         const hp = isCombat ? ` <span class="roster-hp">${s.hull}/${s.maxHull}</span>` : '';
-        return `<div class="roster-entry ${teamCls}${active}${selected}" data-ship="${s.id}">
+        return `<div class="roster-entry${active}${selected}" style="--team-color:${teamColor(s.teamId)}" data-ship="${s.id}">
             <span class="roster-dot"></span>
-            <span class="roster-name">${s.name}</span>${hp}
+            <span class="roster-name">${s.name} <small>(Team ${s.teamId + 1})</small></span>${hp}
         </div>`;
     }).join('');
 
@@ -197,7 +307,7 @@ function renderHelm() {
     const facingNames = ['NW', 'NE', 'E', 'SE', 'SW', 'W'];
     const pending = pendingMove?.option;
     actionPanel.innerHTML = `
-        <div class="actor-name p${actor.teamId + 1}">${actor.name}</div>
+        <div class="actor-name" style="color:${teamColor(actor.teamId)}">${actor.name}</div>
         ${pending
             ? `<div class="hint">${pending.isTurnInPlace
                     ? `Turning in place to face ${facingNames[pending.finalFacing]}.`
@@ -362,7 +472,7 @@ function renderGunnery() {
     }).join('');
 
     actionPanel.innerHTML = `
-        <div class="actor-name p${actor.teamId + 1}">${actor.name}</div>
+        <div class="actor-name" style="color:${teamColor(actor.teamId)}">${actor.name}</div>
         <div class="hint">Each weapon auto-targets its closest enemy in range — click an enemy to retarget, or pick a weapon above to see its range.</div>
         <div class="weapon-chips">${chips || '<span class="hint">No weapons can fire.</span>'}</div>
         <div id="target-info" class="target-info"></div>
@@ -493,7 +603,7 @@ function showShipDetails(ship) {
         : '';
 
     shipDetailsEl.innerHTML = `
-        <div class="sd-header p${ship.teamId + 1}">
+        <div class="sd-header" style="--team-color:${teamColor(ship.teamId)}">
             <span class="sd-name">${ship.name}</span>
             <button class="btn btn-ghost sd-close" title="Close">×</button>
         </div>

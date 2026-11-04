@@ -1,0 +1,13 @@
+{
+  "id": "supergraser",
+  "name": "Supergraser",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 10,
+  "damage": "2d8x10",
+  "pcu": 50,
+  "cost": 35,
+  "special": [
+    "Irradiate (high)"
+  ]
+}

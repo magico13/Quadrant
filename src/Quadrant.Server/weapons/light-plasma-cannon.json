@@ -1,0 +1,11 @@
+{
+  "id": "light-plasma-cannon",
+  "name": "Light Plasma Cannon",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 5,
+  "damage": "2d12",
+  "pcu": 10,
+  "cost": 12,
+  "special": []
+}

@@ -1,0 +1,11 @@
+{
+  "id": "railgun",
+  "name": "Railgun",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "8d4",
+  "pcu": 20,
+  "cost": 15,
+  "special": []
+}

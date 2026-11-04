@@ -1,0 +1,13 @@
+{
+  "id": "laser-net",
+  "name": "Laser Net",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 5,
+  "damage": "2d6",
+  "pcu": 10,
+  "cost": 9,
+  "special": [
+    "Point (+10)"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "graser",
+  "name": "Graser",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 5,
+  "damage": "7d10",
+  "pcu": 40,
+  "cost": 35,
+  "special": [
+    "Irradiate (medium)"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "coilgun",
+  "name": "Coilgun",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "4d4",
+  "pcu": 10,
+  "cost": 10,
+  "special": []
+}

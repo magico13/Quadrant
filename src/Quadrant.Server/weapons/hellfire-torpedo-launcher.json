@@ -1,0 +1,13 @@
+{
+  "id": "hellfire-torpedo-launcher",
+  "name": "Hellfire Torpedo Launcher",
+  "type": "Tracking",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "2d10x10",
+  "pcu": 10,
+  "cost": 40,
+  "special": [
+    "Limited Fire 5"
+  ]
+}

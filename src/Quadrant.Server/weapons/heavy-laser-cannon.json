@@ -1,0 +1,11 @@
+{
+  "id": "heavy-laser-cannon",
+  "name": "Heavy Laser Cannon",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 10,
+  "damage": "4d8",
+  "pcu": 10,
+  "cost": 15,
+  "special": []
+}

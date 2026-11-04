@@ -15,8 +15,8 @@ public sealed class ShipInstance
     public required ShipDefinition Definition { get; init; }
 
     /// <summary>
-    /// Team/side identifier. In hotseat: 0 = Player 1, 1 = Player 2.
-    /// In multiplayer: maps to a player or AI controller.
+    /// Team/side identifier, independent of player identity.
+    /// Player and controller assignments are separate future concerns.
     /// </summary>
     public int TeamId { get; set; }
 

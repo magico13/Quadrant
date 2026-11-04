@@ -1,0 +1,11 @@
+{
+  "id": "light-laser-cannon",
+  "name": "Light Laser Cannon",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 5,
+  "damage": "2d4",
+  "pcu": 5,
+  "cost": 2,
+  "special": []
+}

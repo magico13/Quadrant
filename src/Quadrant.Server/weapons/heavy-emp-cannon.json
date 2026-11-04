@@ -1,0 +1,13 @@
+{
+  "id": "heavy-emp-cannon",
+  "name": "Heavy EMP Cannon",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 10,
+  "damage": "0",
+  "pcu": 30,
+  "cost": 12,
+  "special": [
+    "EMP"
+  ]
+}

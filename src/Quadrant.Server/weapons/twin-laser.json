@@ -1,0 +1,11 @@
+{
+  "id": "twin-laser",
+  "name": "Twin Laser",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "5d8",
+  "pcu": 15,
+  "cost": 18,
+  "special": []
+}

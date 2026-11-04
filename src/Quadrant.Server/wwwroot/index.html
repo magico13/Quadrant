@@ -32,6 +32,31 @@
     <div id="ship-details" class="hidden"></div>
     <div id="ship-tooltip" class="hidden"></div>
 
+    <!-- Fleet setup overlay: pick ships for each team before launching. -->
+    <div id="setup-overlay" class="hidden">
+        <div class="setup-inner">
+            <h2>Select Your Fleet</h2>
+            <p class="setup-sub">Add ships to each team, then launch. You can field multiple of the same ship.</p>
+
+            <div class="setup-columns">
+                <section class="setup-catalog" id="setup-catalog">
+                    <h3>Catalog</h3>
+                    <div class="catalog-list" id="catalog-list"></div>
+                </section>
+
+                <section class="setup-teams">
+                    <div id="team-list"></div>
+                    <button class="btn btn-ghost" id="btn-add-team">Add team</button>
+                </section>
+            </div>
+
+            <div class="setup-actions">
+                <button class="btn btn-ghost" id="btn-setup-defaults">Quick Start (defaults)</button>
+                <button class="btn btn-primary" id="btn-setup-launch" disabled>Launch Game</button>
+            </div>
+        </div>
+    </div>
+
     <script src="js/hex.js"></script>
     <script src="js/game.js"></script>
 </body>

@@ -1,0 +1,11 @@
+{
+  "id": "mass-driver",
+  "name": "Mass Driver",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "2d6x10",
+  "pcu": 25,
+  "cost": 30,
+  "special": []
+}

@@ -1,0 +1,11 @@
+{
+  "id": "light-particle-cannon",
+  "name": "Light Particle Cannon",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 10,
+  "damage": "3d6",
+  "pcu": 10,
+  "cost": 10,
+  "special": []
+}

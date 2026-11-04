@@ -1,0 +1,11 @@
+{
+  "id": "particle-beam-cannon",
+  "name": "Particle Beam Cannon",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "3d4x10",
+  "pcu": 30,
+  "cost": 30,
+  "special": []
+}

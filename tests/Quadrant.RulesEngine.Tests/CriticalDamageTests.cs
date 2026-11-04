@@ -119,7 +119,7 @@ public class CriticalDamageTests
         Arc = FiringArc.Forward,
         Damage = DamageExpression.From("4"),
         MinRange = 1,
-        MaxRange = 3,
+        RangeIncrement = 3,
     };
 
     /// <summary>

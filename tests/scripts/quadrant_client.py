@@ -92,9 +92,18 @@ class QuadrantClient:
         return r.json()
 
     # -- game lifecycle ----------------------------------------------------
-    def start_game(self) -> str:
-        """Create a new hotseat game with the default 3-ship setup. Returns room code."""
-        return self._post("/start")["roomCode"]
+    def start_game(self, selections: Optional[list[dict]] = None) -> str:
+        """Create a new hotseat game. Returns room code.
+
+        ``selections`` is an optional list of ``{"shipId": str, "teamId": int}``
+        entries. When omitted the server uses its default fleet (Pegasus vs Gorgon).
+        """
+        body = {"selections": selections} if selections else {}
+        return self._post("/start", body)["roomCode"]
+
+    def catalog(self) -> list[dict]:
+        """Return the ship catalog (id, name, tier, stats, weapons)."""
+        return self._get("/catalog")
 
     def state(self, room: str) -> dict:
         """Full current game state (ships, phase, round, options, log)."""

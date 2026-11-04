@@ -1,0 +1,13 @@
+{
+  "id": "heavy-plasma-torpedo-launcher",
+  "name": "Heavy Plasma Torpedo Launcher",
+  "type": "Tracking",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "5d10",
+  "pcu": 10,
+  "cost": 18,
+  "special": [
+    "Limited Fire 5"
+  ]
+}

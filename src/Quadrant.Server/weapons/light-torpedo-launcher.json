@@ -1,0 +1,11 @@
+{
+  "id": "light-torpedo-launcher",
+  "name": "Light Torpedo Launcher",
+  "type": "Tracking",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "2d8",
+  "pcu": 5,
+  "cost": 7,
+  "special": []
+}

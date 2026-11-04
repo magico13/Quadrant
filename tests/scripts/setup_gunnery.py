@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Drive a fresh Quadrant game into the Gunnery phase with Pegasus set up to
-fire at Gorgon, then print the room code and resulting state.
+approach Gorgon, then print the room code and resulting state.
 
 The helm action order is randomized each round (piloting rolls), so this script
 does NOT assume who acts first. Instead it loops over the Helm phase, reading
 ``currentActorId`` from state on every iteration: when Pegasus is up it moves to
-a hex two away from Gorgon and faces it; everyone else skips. The loop ends as
+a legal hex as close to Gorgon as possible; everyone else skips. The loop ends as
 soon as the phase advances to Gunnery.
 
 Run with the venv::
@@ -34,7 +34,7 @@ def end_engineering(client: QuadrantClient, room: str) -> None:
 def run_helm(client: QuadrantClient, room: str, actor_name: str, target_name: str) -> None:
     """Advance through the Helm phase.
 
-    ``actor_name`` moves to a hex two away from ``target_name`` and faces it;
+    ``actor_name`` moves as close as possible to ``target_name``;
     all other ships skip. Repeats until the phase leaves Helm.
     """
     guard = 0
@@ -54,17 +54,24 @@ def run_helm(client: QuadrantClient, room: str, actor_name: str, target_name: st
             continue
 
         target = next(s for s in state["ships"] if s["name"] == target_name)
-        # Sit two hexes west of the target, facing it (East).
-        dest_q, dest_r = target["q"] - 2, target["r"]
-        facing = direction_to(dest_q, dest_r, target["q"], target["r"])
-
-        res = client.move(room, dest_q, dest_r, facing)
-        ok = res.get("ok", True) if isinstance(res, dict) else True
-        print(
-            f"  [helm] {actor['name']} -> ({dest_q},{dest_r}) "
-            f"facing={FACING_NAMES[facing]} (dist to {target_name}="
-            f"{hex_distance(dest_q, dest_r, target['q'], target['r'])}) ok={ok}"
-        )
+        # Random starting positions may put Gorgon beyond a single move. Choose
+        # the closest legal destination and prefer a facing toward the target.
+        moves = (state.get("options") or {}).get("items", [])
+        if not moves:
+            client.skip_move(room)
+            continue
+        def score(move):
+            pos = move["position"]
+            distance = hex_distance(pos["q"], pos["r"], target["q"], target["r"])
+            desired = direction_to(pos["q"], pos["r"], target["q"], target["r"])
+            return (abs(distance - 2), move["finalFacing"] != desired)
+        move = min(moves, key=score)
+        dest_q, dest_r = move["position"]["q"], move["position"]["r"]
+        facing = move["finalFacing"]
+        client.move(room, dest_q, dest_r, facing)
+        print(f"  [helm] {actor['name']} -> ({dest_q},{dest_r}) "
+              f"facing={FACING_NAMES[facing]} (dist to {target_name}="
+              f"{hex_distance(dest_q, dest_r, target['q'], target['r'])})")
 
 
 def main() -> int:

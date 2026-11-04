@@ -1,0 +1,13 @@
+{
+  "id": "high-explosive-missile-launcher",
+  "name": "High Explosive Missile Launcher",
+  "type": "Tracking",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "4d8",
+  "pcu": 10,
+  "cost": 14,
+  "special": [
+    "Limited Fire 5"
+  ]
+}

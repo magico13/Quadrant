@@ -1,0 +1,13 @@
+{
+  "id": "heavy-torpedo-launcher",
+  "name": "Heavy Torpedo Launcher",
+  "type": "Tracking",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "5d8",
+  "pcu": 10,
+  "cost": 16,
+  "special": [
+    "Limited Fire 5"
+  ]
+}

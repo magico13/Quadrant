@@ -1,0 +1,13 @@
+{
+  "id": "heavy-antimatter-missile-launcher",
+  "name": "Heavy Antimatter Missile Launcher",
+  "type": "Tracking",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "10d10",
+  "pcu": 15,
+  "cost": 35,
+  "special": [
+    "Limited Fire 5"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "quantum-missile-launcher",
+  "name": "Quantum Missile Launcher",
+  "type": "Tracking",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "2d8x10",
+  "pcu": 15,
+  "cost": 35,
+  "special": [
+    "Limited Fire 5",
+    "Quantum"
+  ]
+}

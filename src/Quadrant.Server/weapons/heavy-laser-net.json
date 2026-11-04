@@ -1,0 +1,13 @@
+{
+  "id": "heavy-laser-net",
+  "name": "Heavy Laser Net",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 5,
+  "damage": "5d6",
+  "pcu": 15,
+  "cost": 15,
+  "special": [
+    "Point (+12)"
+  ]
+}

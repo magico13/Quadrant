@@ -11,7 +11,13 @@ docker compose restart server   # restart
 docker compose down             # stop
 ```
 
-Server listens on port **5180**. No persistent state yet (ships are static in `ShipCatalog`, sessions in memory) — add a volume for the `.db` file when SQLite persistence lands.
+Server listens on port **5180**. Ship and weapon definitions are loaded from JSON files at startup; sessions are in memory. There is no SQLite persistence yet — add a volume for the `.db` file when it lands.
+
+## Current State
+- A playable hotseat combat loop is in place, with server-side rules, room codes, and a browser client.
+- The working tree contains uncommitted catalog and fleet setup work: ship and weapon JSON files, startup loading, a catalog API, and a UI for selecting ships for each team. This work has not yet been committed.
+- Six ship definitions and a larger weapon catalog are present. Weapon special tags are catalog data; their effects are not yet implemented.
+- Ship editing and SQLite persistence, per-player access and hidden information, and real-time synchronization remain future work. The architecture and v1 scope below describe targets, not all current implementation.
 
 ## TODO — Completed
 - [x] **Movement confirmation step (client).** Helm moves preview first: ghost ship + Confirm/Cancel panel. `game.js` (`pendingMove`, `setPendingMove()`, `confirmMove()`) + `hex.js` (`setGhost()`).
@@ -22,13 +28,19 @@ Server listens on port **5180**. No persistent state yet (ships are static in `S
 - [x] **Range-based attack penalty.** –2 per increment beyond the first, up to 10 increments max fire range. Canonical data from aonsrd.com (Short=5, Medium=10, Long=20). `Weapon.RangePenalty()`, applied in `CombatEngine.GetValidTargets()` and displayed as hit-chance badges + `[N hexes, –2]` in shot list.
 - [x] **Auto-targeting.** On Gunnery entry, each weapon auto-selects its closest valid enemy. Click any enemy to retarget (assigns best weapon). Weapon chips for per-weapon control.
 - [x] **Ship roster sidebar.** Team-colored ship list with hull readout, active-actor indicator, click-to-show-details + smooth center-on-click. Works in all phases.
+- [x] **JSON catalog and fleet selection (uncommitted).** Load ships and weapons from files and choose each team's fleet before starting a hotseat game.
+- [x] **Multiple teams and random placement (uncommitted).** Setup offers two to five teams; the server accepts any number of valid teams. Each ship acts independently and combat continues until at most one team remains. Team leaders are spread around the first team: each is placed a rolled 3d6+5 hexes from its leader, favoring comparable separation from the other leaders. Allies start within three hexes of an ally, with one random facing per team and no overlapping ships. Placement for three or more teams is a game-specific extension of the two-side rule.
 
 ## TODO — Next Up (Bigger Features)
 
 ### Multiplayer
-- [ ] **Player login / team assignment.** Each player logs in and controls only their team's ships. The other team's actions are hidden until resolved. Room code still used to join; add a "join as P1/P2" step.
+- [ ] **Player login / team assignment.** Keep team identity separate from player identity; initially assign control of teams, with shared teams and control of multiple teams possible later. Room codes remain the way to join.
 - [ ] **Hidden information.** Opponent's hull, shields, weapons, and system damage not visible until revealed by combat or scanning. Server must filter state per-player.
 - [ ] **Real-time sync.** Replace REST polling with SignalR (or SSE) so both players see updates instantly without refresh.
+
+### Alliances (Later)
+- [ ] **Alliances between teams.** Allow two teams to become friendly when both agree; either team can end the alliance unilaterally. Decide how allied victories work when this feature is designed.
+- Until then, cooperative players can share a team. Ships act independently, and team identity should remain separate from player identity so multiplayer can eventually support shared teams.
 
 ### Sensor / Scanning
 - [ ] **Fog of war.** Ships start unknown to the opponent — no position, no stats visible on the grid until scanned or they fire.
@@ -90,7 +102,7 @@ Game Server (ASP.NET Core + SignalR)
 ## Session Management
 - Server hosts many concurrent game sessions
 - 6-char room codes (consonant-heavy alphabet: `ABCDEFGHJKMNPQRSTUVWXYZ23456789`)
-- Create → pick ships → place on grid (manual or random 3d6+5) → start combat
+- Create → pick ships and teams → automatic random placement → start combat (manual placement remains future work)
 - Rematch: same ships, new placement. New Game: reselect ships.
 
 ## v1 Scope
@@ -156,8 +168,8 @@ Quadrant.sln
 └── PLAN.md
 ```
 
-## Ship Roster (Current)
-Based on published Starfinder Society / Pact Worlds ships. All Tier 2.
+## Original Ship Roster
+The original default ships are based on published Starfinder Society / Pact Worlds ships, all Tier 2. Additional ships are now available in `src/Quadrant.Server/ships/`.
 
 | Ship | Size | Speed | Maneuverability | Hull | CT | AC | TL | Shields (F/S/A/P) | Weapons |
 |------|------|-------|-----------------|------|----|----|----|--------------------|---------|
@@ -167,7 +179,7 @@ Based on published Starfinder Society / Pact Worlds ships. All Tier 2.
 
 Range increments per aonsrd.com: Short = 5 hexes, Medium = 10 hexes, Long = 20 hexes.
 
-Default hotseat: Team 0 = Pegasus + AEV (East), Team 1 = Gorgon (West).
+Default hotseat: Team 0 = Pegasus + AEV, Team 1 = Gorgon; positions and team facings are randomized.
 No Damage Threshold on any ship (all "—" in published stats).
 
 ## Ship Data Model (Conceptual)

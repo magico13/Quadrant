@@ -1,0 +1,11 @@
+{
+  "id": "super-plasma-cannon",
+  "name": "Super Plasma Cannon",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 10,
+  "damage": "3d6x10",
+  "pcu": 45,
+  "cost": 35,
+  "special": []
+}

@@ -43,7 +43,7 @@ public sealed class CombatEngine
     public bool StartCombat()
     {
         if (_state.Phase != CombatPhase.Setup) return false;
-        if (_state.Ships.Count < 2) return false;
+        if (_state.Ships.Select(s => s.TeamId).Distinct().Count() < 2) return false;
 
         _state.Phase = CombatPhase.Engineering;
         _state.Round = 1;
@@ -469,26 +469,12 @@ public sealed class CombatEngine
     /// <summary>Checks if one side has been fully defeated.</summary>
     private void CheckVictory()
     {
-        var teams = _state.Ships.Select(s => s.TeamId).Distinct().ToList();
-        foreach (var team in teams)
-        {
-            bool allDown = _state.IsSideDefeated(s => s.TeamId == team);
-            if (allDown)
-            {
-                int winnerTeam = teams.First(t => t != team);
-                _state.Phase = CombatPhase.Complete;
-                _state.Winner = $"Team {winnerTeam + 1}";
-                LastEvents.Add(new CombatEvent("Complete", "", $"{_state.Winner} wins! Team {team + 1} is destroyed."));
-                return;
-            }
-        }
-
-        // If all ships are down (mutual destruction), it's a draw.
-        if (_state.Ships.All(s => s.IsDestroyed || s.IsDisabled))
-        {
-            _state.Phase = CombatPhase.Complete;
-            _state.Winner = "Mutual destruction";
-            LastEvents.Add(new CombatEvent("Complete", "", "All ships destroyed — mutual destruction."));
-        }
+        var activeTeams = _state.ActiveShips().Select(s => s.TeamId).Distinct().ToList();
+        if (activeTeams.Count > 1) return;
+        _state.Phase = CombatPhase.Complete;
+        _state.Winner = activeTeams.Count == 0 ? "Mutual destruction" : $"Team {activeTeams[0] + 1}";
+        LastEvents.Add(new CombatEvent("Complete", "", activeTeams.Count == 0
+            ? "All ships disabled or destroyed — mutual destruction."
+            : $"{_state.Winner} wins!"));
     }
 }

@@ -12,8 +12,8 @@ public sealed record ShipDefinition
     public required string Id { get; init; }
     public required string Name { get; init; }
 
-    /// <summary>Starship tier (1-12+). Used for stunt DCs and encounter scaling.</summary>
-    public int Tier { get; init; } = 1;
+    /// <summary>Starship tier (e.g. 0.33, 1, 2, 3). Used for balance reference.</summary>
+    public double Tier { get; init; } = 1;
 
     /// <summary>Speed in hexes per round.</summary>
     public int Speed { get; init; } = 8;

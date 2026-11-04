@@ -1,0 +1,13 @@
+{
+  "id": "super-emp-cannon",
+  "name": "Super EMP Cannon",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "0",
+  "pcu": 45,
+  "cost": 18,
+  "special": [
+    "EMP"
+  ]
+}

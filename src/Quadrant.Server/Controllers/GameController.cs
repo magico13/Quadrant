@@ -14,14 +14,49 @@ namespace Quadrant.Server.Controllers;
 public class GameController : ControllerBase
 {
     private readonly SessionManager _sessions;
+    private readonly ShipCatalogService _catalog;
 
-    public GameController(SessionManager sessions) => _sessions = sessions;
-
-    /// <summary>Creates a new hotseat game with the default 4-ship setup.</summary>
-    [HttpPost("start")]
-    public IActionResult Start()
+    public GameController(SessionManager sessions, ShipCatalogService catalog)
     {
-        var ships = ShipCatalog.CreateDefaultShips();
+        _sessions = sessions;
+        _catalog = catalog;
+    }
+
+    /// <summary>Returns the ship catalog for the setup UI.</summary>
+    [HttpGet("catalog")]
+    public IActionResult GetCatalog()
+    {
+        return Ok(_catalog.All.Select(s => new
+        {
+            id = s.Id,
+            name = s.Name,
+            tier = s.Tier,
+            speed = s.Speed,
+            maneuverability = s.Maneuverability,
+            hullPoints = s.HullPoints,
+            ac = s.BaseAC,
+            tl = s.BaseTL,
+            shields = new { forward = s.Shields.Forward, starboard = s.Shields.Starboard, aft = s.Shields.Aft, port = s.Shields.Port },
+            weapons = s.Weapons.Select(w => new { name = w.Name, arc = w.Arc, damage = w.Damage.ToString() })
+        }));
+    }
+
+    /// <summary>Creates a new hotseat game. Accepts optional ship selections; falls back to defaults.</summary>
+    [HttpPost("start")]
+    public IActionResult Start([FromBody] StartGameRequest? req)
+    {
+        List<ShipInstance> ships;
+        try
+        {
+            ships = req?.Selections is { Count: > 0 }
+                ? _catalog.CreateShips(req.Selections)
+                : _catalog.CreateDefaultShips();
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+
         var session = _sessions.Create(Guid.NewGuid().ToString(), ships);
         return Ok(new { roomCode = session.RoomCode });
     }
@@ -177,6 +212,7 @@ public class GameController : ControllerBase
     }
 }
 
+public sealed record StartGameRequest(List<ShipSelection>? Selections);
 public sealed record EngineeringRequest(string ShipId, int Amount);
 public sealed record MoveRequest(int Q, int R, int Facing);
 public sealed record TurnInPlaceRequest(int Facing);

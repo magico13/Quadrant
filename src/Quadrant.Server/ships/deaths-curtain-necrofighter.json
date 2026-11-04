@@ -1,0 +1,68 @@
+{
+  "id": "deaths-curtain-necrofighter",
+  "name": "Death's Curtain Necrofighter",
+  "tier": 1,
+  "source": "Starfinder #3: Splintered Worlds pg. 50",
+  "type": "Tiny fighter",
+  "speed": 12,
+  "maneuverability": "good",
+  "distanceBetweenTurns": 1,
+  "drift": null,
+  "ac": 17,
+  "tl": 16,
+  "hp": 35,
+  "dt": null,
+  "ct": 7,
+  "shields": {
+    "type": "basic",
+    "total": 30,
+    "forward": 10,
+    "port": 7,
+    "starboard": 7,
+    "aft": 6
+  },
+  "weapons": [
+    {
+      "weaponId": "light-particle-cannon",
+      "arc": "forward"
+    },
+    {
+      "weaponId": "light-plasma-torpedo-launcher",
+      "arc": "forward"
+    }
+  ],
+  "powerCore": {
+    "name": "Micron Ultra",
+    "pcu": 80
+  },
+  "driftEngine": null,
+  "systems": [
+    "basic short-range sensors",
+    "mk 1 duonode computer",
+    "mk 4 armor",
+    "mk 3 defenses"
+  ],
+  "expansionBays": [],
+  "modifiers": {
+    "anyTwoChecksPerRound": 1,
+    "computers": 2
+  },
+  "complement": 2,
+  "complementMin": 1,
+  "complementMax": 2,
+  "crew": [
+    {
+      "role": "Gunner",
+      "skills": {
+        "gunnery": 5
+      }
+    },
+    {
+      "role": "Pilot",
+      "skills": {
+        "gunnery": 5,
+        "piloting": 10
+      }
+    }
+  ]
+}

@@ -8,6 +8,11 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.14" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="ships\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="weapons\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>

@@ -1,0 +1,11 @@
+{
+  "id": "maser",
+  "name": "Maser",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "6d10",
+  "pcu": 35,
+  "cost": 22,
+  "special": []
+}

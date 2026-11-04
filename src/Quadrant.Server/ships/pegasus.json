@@ -1,0 +1,49 @@
+{
+  "id": "pegasus",
+  "name": "Pegasus",
+  "tier": 2,
+  "source": "Society Guide v7.02 pg. 5",
+  "type": "Medium explorer",
+  "speed": 10,
+  "maneuverability": "good",
+  "distanceBetweenTurns": 1,
+  "drift": null,
+  "ac": 12,
+  "tl": 12,
+  "hp": 55,
+  "dt": null,
+  "ct": 11,
+  "shields": {
+    "type": "standard",
+    "total": 40,
+    "forward": 10,
+    "port": 10,
+    "starboard": 10,
+    "aft": 10
+  },
+  "weapons": [
+    {
+      "weaponId": "light-laser-cannon",
+      "arc": "forward"
+    },
+    {
+      "weaponId": "light-laser-cannon",
+      "arc": "port"
+    },
+    {
+      "weaponId": "light-laser-cannon",
+      "arc": "starboard"
+    },
+    {
+      "weaponId": "coilgun",
+      "arc": "allArcs"
+    }
+  ],
+  "powerCore": null,
+  "driftEngine": null,
+  "systems": [],
+  "expansionBays": [],
+  "modifiers": {},
+  "complement": null,
+  "crew": []
+}

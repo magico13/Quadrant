@@ -1,0 +1,13 @@
+{
+  "id": "nuclear-mega-missile-launcher",
+  "name": "Nuclear Mega-Missile Launcher",
+  "type": "Tracking",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "4d8x10",
+  "pcu": 15,
+  "cost": 60,
+  "special": [
+    "Limited Fire 5"
+  ]
+}

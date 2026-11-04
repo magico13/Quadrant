@@ -1,0 +1,56 @@
+{
+  "id": "barrow-boneshard",
+  "name": "Barrow Boneshard",
+  "tier": 0.33,
+  "source": "Starfinder #6: Empire of Bones pg. 50",
+  "type": "Tiny racer",
+  "speed": 14,
+  "maneuverability": "perfect",
+  "distanceBetweenTurns": 0,
+  "drift": null,
+  "ac": 16,
+  "tl": 13,
+  "hp": 20,
+  "dt": null,
+  "ct": 4,
+  "shields": {
+    "type": "none",
+    "total": 0,
+    "forward": 0,
+    "port": 0,
+    "starboard": 0,
+    "aft": 0
+  },
+  "weapons": [
+    {
+      "weaponId": "flak-thrower",
+      "arc": "forward"
+    },
+    {
+      "weaponId": "flak-thrower",
+      "arc": "aft"
+    }
+  ],
+  "powerCore": {
+    "name": "Micron Heavy",
+    "pcu": 70
+  },
+  "driftEngine": null,
+  "systems": [
+    "basic computer",
+    "budget short-range sensors",
+    "mk 3 armor"
+  ],
+  "expansionBays": [],
+  "modifiers": {},
+  "complement": 1,
+  "crew": [
+    {
+      "role": "Pilot",
+      "skills": {
+        "gunnery": 4,
+        "piloting": 10
+      }
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "plasma-cannon",
+  "name": "Plasma Cannon",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 10,
+  "damage": "5d12",
+  "pcu": 30,
+  "cost": 20,
+  "special": []
+}

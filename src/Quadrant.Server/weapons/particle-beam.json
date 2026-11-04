@@ -1,0 +1,11 @@
+{
+  "id": "particle-beam",
+  "name": "Particle Beam",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "8d6",
+  "pcu": 25,
+  "cost": 20,
+  "special": []
+}

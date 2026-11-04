@@ -1,0 +1,14 @@
+{
+  "id": "heavy-nuclear-missile-launcher",
+  "name": "Heavy Nuclear Missile Launcher",
+  "type": "Tracking",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "10d8",
+  "pcu": 15,
+  "cost": 35,
+  "special": [
+    "Irradiate (medium)",
+    "Limited Fire 5"
+  ]
+}

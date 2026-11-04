@@ -1,0 +1,13 @@
+{
+  "id": "solar-torpedo-launcher",
+  "name": "Solar Torpedo Launcher",
+  "type": "Tracking",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "2d6x10",
+  "pcu": 10,
+  "cost": 25,
+  "special": [
+    "Limited Fire 5"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "light-plasma-torpedo-launcher",
+  "name": "Light Plasma Torpedo Launcher",
+  "type": "Tracking",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "3d8",
+  "pcu": 5,
+  "cost": 11,
+  "special": [
+    "Limited Fire 5"
+  ]
+}

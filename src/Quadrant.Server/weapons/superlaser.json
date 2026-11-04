@@ -1,0 +1,11 @@
+{
+  "id": "superlaser",
+  "name": "Superlaser",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "2d4x10",
+  "pcu": 20,
+  "cost": 20,
+  "special": []
+}

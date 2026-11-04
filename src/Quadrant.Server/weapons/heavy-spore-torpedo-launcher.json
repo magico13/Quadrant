@@ -1,0 +1,14 @@
+{
+  "id": "heavy-spore-torpedo-launcher",
+  "name": "Heavy Spore Torpedo Launcher",
+  "type": "Tracking",
+  "minRange": 1,
+  "rangeIncrement": 10,
+  "damage": "5d8",
+  "pcu": 10,
+  "cost": 10,
+  "special": [
+    "Limited Fire 5",
+    "Spore"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "persistent-particle-beam-cannon",
+  "name": "Persistent Particle Beam Cannon",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "2d10x10",
+  "pcu": 50,
+  "cost": 40,
+  "special": []
+}

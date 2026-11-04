@@ -1,0 +1,80 @@
+{
+  "id": "grave-casket",
+  "name": "Grave Casket",
+  "tier": 3,
+  "source": "Starfinder #3: Splintered Worlds pg. 50",
+  "type": "Small shuttle",
+  "speed": 12,
+  "maneuverability": "perfect",
+  "distanceBetweenTurns": 0,
+  "drift": 1,
+  "ac": 21,
+  "tl": 20,
+  "hp": 35,
+  "dt": null,
+  "ct": 7,
+  "shields": {
+    "type": "light",
+    "total": 60,
+    "forward": 15,
+    "port": 15,
+    "starboard": 15,
+    "aft": 15
+  },
+  "weapons": [
+    {
+      "weaponId": "light-plasma-cannon",
+      "arc": "forward"
+    }
+  ],
+  "powerCore": {
+    "name": "Pulse Brown",
+    "pcu": 90
+  },
+  "driftEngine": "Signal Basic",
+  "systems": [
+    "advanced medium-range sensors",
+    "basic computer",
+    "crew quarters (common)",
+    "mk 7 armor",
+    "mk 7 defenses"
+  ],
+  "expansionBays": [
+    "cargo hold",
+    "passenger seating",
+    "sealed environmental chamber"
+  ],
+  "modifiers": {
+    "computers": 4,
+    "piloting": 1
+  },
+  "complement": 4,
+  "complementMin": 1,
+  "complementMax": 4,
+  "crew": [
+    {
+      "role": "Engineer",
+      "skills": {
+        "engineering": 8
+      }
+    },
+    {
+      "role": "Gunner",
+      "skills": {
+        "gunnery": 8
+      }
+    },
+    {
+      "role": "Pilot",
+      "skills": {
+        "piloting": 14
+      }
+    },
+    {
+      "role": "Science Officer",
+      "skills": {
+        "computers": 12
+      }
+    }
+  ]
+}

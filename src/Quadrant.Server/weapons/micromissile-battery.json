@@ -1,0 +1,14 @@
+{
+  "id": "micromissile-battery",
+  "name": "Micromissile Battery",
+  "type": "Tracking",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "2d6",
+  "pcu": 10,
+  "cost": 5,
+  "special": [
+    "Array",
+    "Limited Fire 5"
+  ]
+}

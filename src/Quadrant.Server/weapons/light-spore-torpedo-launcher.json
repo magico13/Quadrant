@@ -1,0 +1,14 @@
+{
+  "id": "light-spore-torpedo-launcher",
+  "name": "Light Spore Torpedo Launcher",
+  "type": "Tracking",
+  "minRange": 1,
+  "rangeIncrement": 10,
+  "damage": "3d6",
+  "pcu": 5,
+  "cost": 5,
+  "special": [
+    "Limited Fire 5",
+    "Spore"
+  ]
+}

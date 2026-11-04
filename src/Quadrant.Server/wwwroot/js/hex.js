@@ -1,3 +1,9 @@
+// Shared team colors; additional team IDs receive distinct generated hues.
+function teamColor(teamId) {
+    const colors = ['#4fc3f7', '#ff7043', '#a5d66c', '#d49af0', '#ffd166'];
+    return colors[teamId] || `hsl(${(teamId * 137.508) % 360} 70% 70%)`;
+}
+
 // Quadrant — Hex grid rendering (pointy-top, axial coordinates).
 // This module is pure rendering + input; it knows nothing about game rules.
 
@@ -326,7 +332,7 @@ class HexGrid {
 
         // Movement path: a dashed line through the hex centers of the previewed route.
         if (this.path && this.path.length > 1) {
-            const color = this.ghost?.teamId === 0 ? '#4fc3f7' : '#ff7043';
+            const color = teamColor(this.ghost?.teamId ?? 0);
             ctx.save();
             ctx.strokeStyle = color;
             ctx.lineWidth = 2 / this.zoom;
@@ -358,7 +364,7 @@ class HexGrid {
     _drawShip(x, y, ship) {
         const ctx = this.ctx;
         const r = this.size * 0.42;
-        const color = ship.teamId === 0 ? '#4fc3f7' : '#ff7043';
+        const color = teamColor(ship.teamId);
         const isSelected = ship.id === this.selectedShipId;
 
         // Shield arcs: four quadrants relative to facing, all on ONE circle.

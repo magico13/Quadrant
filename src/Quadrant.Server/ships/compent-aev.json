@@ -1,0 +1,57 @@
+{
+  "id": "compent-aev",
+  "name": "Compent AEV",
+  "tier": 0.33,
+  "source": "Pact Worlds pg. 154",
+  "type": "Tiny racer",
+  "speed": 8,
+  "maneuverability": "perfect",
+  "distanceBetweenTurns": 0,
+  "drift": 1,
+  "ac": 15,
+  "tl": 12,
+  "hp": 20,
+  "dt": null,
+  "ct": 4,
+  "shields": {
+    "type": "basic",
+    "total": 10,
+    "forward": 3,
+    "port": 2,
+    "starboard": 2,
+    "aft": 3
+  },
+  "weapons": [
+    {
+      "weaponId": "mining-laser",
+      "arc": "forward"
+    }
+  ],
+  "powerCore": {
+    "name": "Micron Light",
+    "pcu": 50
+  },
+  "driftEngine": "Signal Basic",
+  "systems": [
+    "basic computer",
+    "basic short-range sensors",
+    "data net",
+    "mk 3 armor"
+  ],
+  "expansionBays": [],
+  "modifiers": {
+    "computers": 2,
+    "piloting": 2
+  },
+  "complement": 1,
+  "crew": [
+    {
+      "role": "Science Officer",
+      "skills": {
+        "computers": 12,
+        "gunnery": 4,
+        "piloting": 7
+      }
+    }
+  ]
+}

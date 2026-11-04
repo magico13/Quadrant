@@ -1,0 +1,11 @@
+{
+  "id": "persistent-particle-beam",
+  "name": "Persistent Particle Beam",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 20,
+  "damage": "10d6",
+  "pcu": 40,
+  "cost": 25,
+  "special": []
+}

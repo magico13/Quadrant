@@ -1,0 +1,13 @@
+{
+  "id": "mining-laser",
+  "name": "Mining Laser",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 5,
+  "damage": "2d6",
+  "pcu": 10,
+  "cost": 5,
+  "special": [
+    "Burrowing"
+  ]
+}

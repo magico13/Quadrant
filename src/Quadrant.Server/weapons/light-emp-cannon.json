@@ -1,0 +1,13 @@
+{
+  "id": "light-emp-cannon",
+  "name": "Light EMP Cannon",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 5,
+  "damage": "0",
+  "pcu": 10,
+  "cost": 8,
+  "special": [
+    "EMP"
+  ]
+}

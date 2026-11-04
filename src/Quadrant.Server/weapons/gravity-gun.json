@@ -1,0 +1,13 @@
+{
+  "id": "gravity-gun",
+  "name": "Gravity Gun",
+  "type": "Direct-Fire",
+  "minRange": 1,
+  "rangeIncrement": 10,
+  "damage": "6d6",
+  "pcu": 40,
+  "cost": 30,
+  "special": [
+    "Tractor Beam"
+  ]
+}
