@@ -16,11 +16,25 @@ let roomCode = null;
 let state = null;          // last fetched game state
 let selectedShots = new Map(); // gunnery: weaponIndex → targetShipId (one target per weapon instance)
 let activeWeapon = null;   // currently selected weapon in gunnery targeting
-let gunneryFeedback = null;
 let selectedTargetArcs = new Map();
 let detailsShipId = null;  // ship currently shown in the details panel
 let pendingMove = null;    // helm: { option, actorId } — move previewed, awaiting confirmation
 let refreshGunnery = null; // module-scope handle to the current gunnery refresh fn
+
+function assignGunneryTarget(weaponIndex, targetId) {
+    const fired = new Set(state.firedWeaponIndices || []);
+    const limit = currentActor()?.crewShotsRemaining ?? 0;
+    const pending = [...selectedShots.keys()].filter(i => !fired.has(i) && i !== weaponIndex);
+    while (pending.length >= limit && pending.length) selectedShots.delete(pending.shift());
+    if (limit > 0) selectedShots.set(weaponIndex, targetId);
+}
+
+function formatTier(tier) {
+    if (Math.abs(tier - 1 / 3) < 0.01) return '1/3';
+    if (tier === 0.5) return '1/2';
+    if (tier === 0.25) return '1/4';
+    return String(tier);
+}
 
 // ────────────────────────────────────────────────
 //  API helpers
@@ -106,7 +120,7 @@ function renderCatalogList() {
         <div class="catalog-card">
             <div class="cc-top">
                 <span class="cc-name">${s.name}</span>
-                <span class="cc-tier">Tier ${s.tier}</span>
+                <span class="cc-tier">Tier ${formatTier(s.tier)}</span>
             </div>
             <div class="cc-stats">SPD ${s.speed} · HP ${s.hullPoints} · AC ${s.ac} · ${s.maneuverability}</div>
             <div class="cc-weapons">${s.weapons.map(w => `${w.name} (${w.arc})`).join(', ') || 'no weapons'}</div>
@@ -183,7 +197,7 @@ document.getElementById('btn-setup-defaults').addEventListener('click', () => {
 function render() {
     if (!state) return;
 
-    phaseEl.textContent = state.phase;
+    phaseEl.textContent = state.phase === 'CrewSetup' ? 'Crew Setup' : state.phase;
     roundEl.textContent = `Round ${state.round}`;
     roomEl.textContent = roomCode || '';
 
@@ -212,6 +226,7 @@ function render() {
 
     switch (state.phase) {
         case 'Setup': renderSetup(); break;
+        case 'CrewSetup': renderRoles(); break;
         case 'Engineering': renderEngineering(); break;
         case 'Helm': renderHelm(); break;
         case 'Gunnery': renderGunnery(); break;
@@ -228,7 +243,7 @@ const rosterEl = document.getElementById('ship-roster');
 
 function renderRoster() {
     if (!state || !state.ships) { rosterEl.innerHTML = ''; return; }
-    const isCombat = ['Engineering', 'Helm', 'Gunnery'].includes(state.phase);
+    const isCombat = ['CrewSetup', 'Engineering', 'Helm', 'Gunnery'].includes(state.phase);
     const entries = [
         ...state.ships.map(s => ({ ...s, entryType: 'ship' })),
         ...(state.projectiles || []).map(p => ({ ...p, entryType: 'projectile' }))
@@ -272,40 +287,43 @@ function renderSetup() {
     });
 }
 
-// ── Engineering (v1: simple hull repair) ──
+// ── Engineering ──
+function renderRoles() {
+    grid.setHighlights([]);
+    grid.setTargets([]);
+    const roles = ['Captain', 'Engineer', 'Gunner', 'Pilot', 'Science Officer'];
+    const active = state.ships.filter(s => !s.isDestroyed && !s.isDisabled);
+    actionPanel.innerHTML = `
+        <div class="actor-name">Crew Roles</div>
+        <div class="hint">Choose roles for this round. Previous assignments are kept until changed.</div>
+        ${active.map(ship => `<div class="detail-section" style="color:${teamColor(ship.teamId)}">${ship.name} (Team ${ship.teamId + 1})</div>
+            ${(ship.crew || []).map((crew, index) => `<div class="eng-row">
+                <label for="role-${ship.id}-${index}">${crew.primaryRole} ${index + 1} · ${crew.ranks} ranks</label>
+                <select id="role-${ship.id}-${index}" data-role-ship="${ship.id}">
+                    ${roles.map(role => `<option value="${role}" ${crew.role === role ? 'selected' : ''}>${role}</option>`).join('')}
+                </select>
+            </div>`).join('') || '<div class="hint">No crew recorded.</div>'}`).join('')}
+        <div id="roles-error" class="hint"></div>
+        <button class="btn btn-primary" id="btn-confirm-roles">Confirm Roles</button>`;
+    document.getElementById('btn-confirm-roles').addEventListener('click', async () => {
+        const ships = active.map(ship => ({ shipId: ship.id, roles: [...actionPanel.querySelectorAll(`[data-role-ship="${ship.id}"]`)].map(select => select.value) }));
+        try {
+            await api(`/${roomCode}/roles`, { ships });
+            await fetchState();
+        } catch (err) {
+            document.getElementById('roles-error').textContent = `Could not save roles: ${err.message}`;
+        }
+    });
+}
+
 function renderEngineering() {
     grid.setHighlights([]);
     grid.setTargets([]);
-
-    const damaged = state.ships.filter(s => !s.isDestroyed && s.hull < s.maxHull);
-
-    if (damaged.length === 0) {
-        actionPanel.innerHTML = `
-            <div class="actor-name">Engineering</div>
-            <div class="hint">No hull damage to repair.</div>
-            <button class="btn btn-primary" id="btn-end-eng">End Engineering</button>`;
-        document.getElementById('btn-end-eng').addEventListener('click', async () => {
-            await api(`/${roomCode}/end-engineering`);
-            await fetchState();
-        });
-        return;
-    }
-
     actionPanel.innerHTML = `
         <div class="actor-name">Engineering</div>
-        <div class="hint">Repair up to 3 hull points per ship this round.</div>
-        ${damaged.map(s => `
-            <div class="eng-row">
-                <label>${s.name} — ${s.hull}/${s.maxHull} hull</label>
-                <input type="number" id="eng-${s.id}" min="0" max="${Math.min(3, s.maxHull - s.hull)}" value="0">
-            </div>`).join('')}
+        <div class="hint">Engineer actions are not yet available.</div>
         <button class="btn btn-primary" id="btn-end-eng">End Engineering</button>`;
-
     document.getElementById('btn-end-eng').addEventListener('click', async () => {
-        for (const s of damaged) {
-            const amount = parseInt(document.getElementById(`eng-${s.id}`).value, 10) || 0;
-            if (amount > 0) await api(`/${roomCode}/engineering`, { shipId: s.id, amount });
-        }
         await api(`/${roomCode}/end-engineering`);
         await fetchState();
     });
@@ -316,6 +334,31 @@ function renderHelm() {
     const actor = currentActor();
     if (!actor) { grid.setHighlights([]); grid.setTargets([]); grid.setGhost(null); grid.setPath(null); actionPanel.innerHTML = ''; return; }
 
+    if (state.freeAttack) {
+        const attack = state.freeAttack;
+        const defender = state.ships.find(s => s.id === attack.defenderId);
+        grid.setHighlights([]);
+        grid.setTargets([]);
+        grid.setGhost(null);
+        grid.setPath(null);
+        actionPanel.innerHTML = `<div class="actor-name" style="color:${teamColor(defender.teamId)}">${defender.name} (Team ${defender.teamId + 1})</div>
+            <div class="hint">${actor.name} is passing through this ship. Choose a gunner and direct-fire weapon for a free attack against its aft shields, or pass.</div>
+            <label>Gunner <select id="free-gunner">${attack.gunners.map((g, i) => `<option value="${g.index}">Gunner ${i + 1} (${g.bonus >= 0 ? '+' : ''}${g.bonus})</option>`).join('')}</select></label>
+            <label>Weapon <select id="free-weapon">${attack.weapons.map(w => `<option value="${w.index}">${w.name} (${w.arc})</option>`).join('')}</select></label>
+            <button class="btn btn-primary" id="btn-free-fire">Fire Free Attack</button>
+            <button class="btn btn-ghost" id="btn-free-pass">Pass</button>`;
+        async function resolveFreeAttack(fire) {
+            try {
+                await api(`/${roomCode}/free-attack`, { weaponIndex: fire ? Number(document.getElementById('free-weapon').value) : null,
+                    gunnerIndex: fire ? Number(document.getElementById('free-gunner').value) : null });
+                await fetchState();
+            } catch (err) { addLog('error', `Free attack failed: ${err.message}`); }
+        }
+        document.getElementById('btn-free-fire').addEventListener('click', () => resolveFreeAttack(true));
+        document.getElementById('btn-free-pass').addEventListener('click', () => resolveFreeAttack(false));
+        return;
+    }
+
     // Highlight every reachable hex (union over facings).
     grid.setHighlights((state.options?.items || []).map(m => m.position));
     grid.setTargets([]);
@@ -324,23 +367,37 @@ function renderHelm() {
     const pending = pendingMove?.option;
     actionPanel.innerHTML = `
         <div class="actor-name" style="color:${teamColor(actor.teamId)}">${actor.name}</div>
+        ${actor.helmAction === 'Glide' ? '<div class="hint">Glide: half speed, +2 distance between turns; uses a minor crew action.</div>' : actor.helmAction === 'None' ? '<div class="hint">No crew member can move this ship.</div>' : ''}
         ${pending
             ? `<div class="hint">${pending.isTurnInPlace
                     ? `Turning in place to face ${facingNames[pending.finalFacing]}.`
                     : `Moving to (${pending.position.q}, ${pending.position.r}), facing ${facingNames[pending.finalFacing]}.`} Click another hex or your ship to change, or confirm.</div>
                <button class="btn btn-primary" id="btn-confirm-move">Confirm Move</button>
                <button class="btn btn-ghost" id="btn-cancel-move">Cancel</button>`
-            : `<div class="hint">Click a highlighted hex to preview a move. Click your own ship to turn in place. If several facings are possible, you'll be asked which.</div>
-               <button class="btn btn-ghost" id="btn-hold">Hold Position</button>`}`;
+            : state.pendingStunt
+                ? `<div class="hint">${state.pendingStunt}: choose a highlighted destination to preview the result.</div>${(state.options?.items || []).some(m => m.position.q === actor.q && m.position.r === actor.r) ? '<button class="btn btn-ghost" id="btn-stunt-hold">Preview current hex</button>' : ''}`
+                : `<div class="hint">Click a highlighted hex to preview a move.${actor.helmAction === 'Pilot' ? ' Click your own ship to turn in place.' : ''}</div>
+                   <button class="btn btn-ghost" id="btn-hold">Hold Position</button>
+                   ${actor.helmAction === 'Pilot' ? '<div class="detail-section">Stunts</div><button class="btn btn-ghost" data-stunt="Back Off">Back Off</button> <button class="btn btn-ghost" data-stunt="Flip and Burn">Flip and Burn</button>' : ''}`}`;
 
     if (pending) {
         document.getElementById('btn-confirm-move').addEventListener('click', confirmMove);
         document.getElementById('btn-cancel-move').addEventListener('click', () => setPendingMove(null));
     } else {
-        document.getElementById('btn-hold').addEventListener('click', async () => {
+        document.getElementById('btn-hold')?.addEventListener('click', async () => {
             await api(`/${roomCode}/skip-move`);
             await fetchState();
         });
+        document.getElementById('btn-stunt-hold')?.addEventListener('click', () => {
+            const option = (state.options?.items || []).find(m => m.position.q === actor.q && m.position.r === actor.r);
+            if (option) setPendingMove(option);
+        });
+        actionPanel.querySelectorAll('[data-stunt]').forEach(button => button.addEventListener('click', async () => {
+            try {
+                await api(`/${roomCode}/stunt`, { stunt: button.dataset.stunt });
+                await fetchState();
+            } catch (err) { addLog('error', `Stunt failed: ${err.message}`); }
+        }));
     }
 }
 
@@ -476,7 +533,6 @@ function renderGunnery() {
         selectedShots.clear();
         selectedTargetArcs.clear();
         activeWeapon = null;
-        gunneryFeedback = null;
         renderGunnery.round = state.round;
     }
 
@@ -489,17 +545,23 @@ function renderGunnery() {
         weapons.get(o.weaponIndex).push(o);
     }
 
-    // Auto-target each unfired weapon to its closest valid enemy.
+    const fired = new Set(state.firedWeaponIndices || []);
+    // Preserve valid assignments, up to the number of remaining crew actions.
+    for (const [widx, target] of selectedShots) {
+        if (!fired.has(widx) && !(weapons.get(widx) || []).some(o => o.targetShipId === target))
+            selectedShots.delete(widx);
+    }
     for (const [widx, opts] of weapons) {
         if (!opts.length) continue;
-        const currentArc = selectedTargetArcs.get(opts[0].targetShipId);
-        const eligible = currentArc ? opts.filter(o => !o.arcChoiceRequired || o.arc === currentArc) : opts;
+        if (selectedShots.has(widx)) continue;
+        if ([...selectedShots.keys()].filter(i => !fired.has(i)).length >= actor.crewShotsRemaining) break;
+        const eligible = opts.filter(o => !o.arcChoiceRequired || !selectedTargetArcs.has(o.targetShipId) ||
+            o.arc === 'AllArcs' || o.arc === selectedTargetArcs.get(o.targetShipId));
+        if (!eligible.length) continue;
         const closest = eligible.reduce((best, o) => o.range < best.range ? o : best);
-        if (!selectedShots.has(widx) || !opts.some(o => o.targetShipId === selectedShots.get(widx)))
-            selectedShots.set(widx, closest.targetShipId);
+        selectedShots.set(widx, closest.targetShipId);
     }
 
-    const fired = new Set(state.firedWeaponIndices || []);
     const usableIndices = [...weapons.keys()].filter(i => !fired.has(i));
     if (activeWeapon === null || fired.has(activeWeapon) || !weapons.has(activeWeapon))
         activeWeapon = usableIndices[0] ?? null;
@@ -513,16 +575,17 @@ function renderGunnery() {
         const ammo = w.limitedFireUses > 0 ? ` · ${w.usesRemaining}/${w.limitedFireUses}` : '';
         const exhausted = w.limitedFireUses > 0 && w.usesRemaining === 0;
         const isFired = fired.has(widx);
-        return `<button class="weapon-chip${isFired ? ' fired' : ''}" data-weapon="${widx}" ${(exhausted || isFired) ? `disabled title="${isFired ? 'Already fired this round' : 'Out of ammunition'}"` : ''}>${w.name}${arcLabel}${dmg}${ammo}${isFired ? ' · FIRED' : ''}</button>`;
+        return `<button class="weapon-chip${activeWeapon === widx ? ' active' : ''}${isFired ? ' fired' : ''}" data-weapon="${widx}" ${(exhausted || isFired) ? `disabled title="${isFired ? 'Already fired this round' : 'Out of ammunition'}"` : ''}>${w.name}${arcLabel}${dmg}${ammo}${isFired ? ' · FIRED' : ''}</button>`;
     }).join('');
 
     actionPanel.innerHTML = `
         <div class="actor-name" style="color:${teamColor(actor.teamId)}">${actor.name}</div>
         <div class="hint">Choose a weapon and target, then fire it. Hits are resolved in order; damage waits until all ships finish Gunnery.</div>
+        <div class="hint">Up to ${Math.min(actor.crewShotsRemaining, weapons.size)} shot${Math.min(actor.crewShotsRemaining, weapons.size) === 1 ? '' : 's'} remaining (${actor.crewShotsRemaining} available crew action${actor.crewShotsRemaining === 1 ? '' : 's'}).</div>
+        ${actor.gunneryAction === 'Snap Shot' ? '<div class="hint">Snap Shot: one weapon, with a −2 gunnery penalty; uses a minor crew action.</div>' : ''}
         <div id="arc-choice" class="target-info"></div>
         <div class="weapon-chips">${chips || '<span class="hint">No weapons can fire.</span>'}</div>
         <div id="target-info" class="target-info"></div>
-        ${gunneryFeedback ? `<div class="hint gunnery-feedback">${gunneryFeedback}</div>` : ''}
         <button class="btn btn-primary" id="btn-fire" disabled>Fire</button>
         <button class="btn btn-ghost" id="btn-end-fire">End Gunnery Turn</button>`;
 
@@ -590,6 +653,12 @@ function renderGunnery() {
         chip.addEventListener('click', () => {
             const idx = parseInt(chip.dataset.weapon, 10);
             activeWeapon = (activeWeapon === idx) ? null : idx;
+            if (activeWeapon !== null && !selectedShots.has(idx)) {
+                const opts = weapons.get(idx) || [];
+                const eligible = opts.filter(o => !o.arcChoiceRequired || !selectedTargetArcs.has(o.targetShipId) ||
+                    o.arc === 'AllArcs' || o.arc === selectedTargetArcs.get(o.targetShipId));
+                if (eligible.length) assignGunneryTarget(idx, eligible.reduce((best, o) => o.range < best.range ? o : best).targetShipId);
+            }
             actionPanel.querySelectorAll('.weapon-chip').forEach(c =>
                 c.classList.toggle('active', parseInt(c.dataset.weapon, 10) === activeWeapon));
             refresh();
@@ -606,11 +675,7 @@ function renderGunnery() {
         const arc = option?.arcChoiceRequired ? selectedTargetArcs.get(targetShipId) : undefined;
         if (option?.arcChoiceRequired && !arc) return;
         const response = await api(`/${roomCode}/fire`, { weaponIndex: activeWeapon, targetShipId, arc });
-        const target = state.ships.find(s => s.id === targetShipId);
-        const weapon = actor.weapons?.[activeWeapon];
-        gunneryFeedback = response.result
-            ? `${actor.name} (Team ${actor.teamId + 1}) fires ${weapon?.name ?? 'weapon'} at ${target?.name ?? 'target'} (Team ${(target?.teamId ?? 0) + 1}): ${response.result}`
-            : 'Weapon could not fire.';
+        if (!response.ok) addLog('error', 'Weapon could not fire.');
         await fetchState();
     });
 
@@ -681,8 +746,13 @@ function showShipDetails(ship) {
         </div>`).join('');
 
     const systemsHtml = (ship.damagedSystems || []).length
-        ? `<div class="detail-section">Damaged Systems</div><ul class="detail-list">${ship.damagedSystems.map(s => `<li>${s.system} — ${s.condition}</li>`).join('')}</ul>`
+        ? `<div class="detail-section">Damaged Systems</div><ul class="detail-list detail-list-damaged">${ship.damagedSystems.map(s => `<li>${s.system} — ${s.condition}</li>`).join('')}</ul>`
         : '';
+
+    const crewHtml = (ship.crew || []).map(crew => {
+        const bonus = crew.roleBonus == null ? '' : ` ${crew.roleBonus >= 0 ? '+' : ''}${crew.roleBonus}`;
+        return `<li>${crew.role}${bonus}</li>`;
+    }).join('');
 
     shipDetailsEl.innerHTML = `
         <div class="sd-header" style="--team-color:${teamColor(ship.teamId)}">
@@ -690,6 +760,8 @@ function showShipDetails(ship) {
             <button class="btn btn-ghost sd-close" title="Close">×</button>
         </div>
         <div class="detail-grid">
+            <div class="detail-stat"><span>Tier</span><b>${formatTier(ship.tier)}</b></div>
+            <div class="detail-stat"><span>Size</span><b>${ship.size ?? '—'}</b></div>
             <div class="detail-stat"><span>Hull</span><b>${ship.hull}/${ship.maxHull}</b></div>
             <div class="detail-stat"><span>Shields</span><b>${shieldTotal}/${shieldMax}</b></div>
             <div class="detail-stat"><span>AC</span><b>${ship.ac}</b></div>
@@ -702,6 +774,8 @@ function showShipDetails(ship) {
             <div class="sa-row"><span>${a[0].toUpperCase() + a.slice(1)}</span><b>${ship.shields?.[a] ?? 0}</b></div>`).join('')}</div>
         <div class="detail-section">Weapons</div>
         ${weaponsHtml || '<div class="hint">No weapons.</div>'}
+        <div class="detail-section">Crew</div>
+        ${crewHtml ? `<ul class="detail-list">${crewHtml}</ul>` : '<div class="hint">No crew recorded.</div>'}
         ${systemsHtml}
         ${(ship.isDisabled || ship.isDestroyed) ? `<div class="ship-status">${ship.isDestroyed ? 'DESTROYED' : 'DISABLED'}</div>` : ''}`;
 
@@ -771,10 +845,14 @@ grid.onShipHover = (ship, x, y) => {
 
 grid.onShipClick = (ship) => {
     if (!state || state.isComplete) return;
+    if (state.freeAttack) return;
 
     // During Helm, clicking your own ship offers the Turn In Place stunt.
     if (state.phase === 'Helm' && ship.id === state.currentActorId) {
-        showTurnInPlacePicker(ship);
+        if (state.pendingStunt) {
+            const option = (state.options?.items || []).find(m => m.position.q === ship.q && m.position.r === ship.r);
+            if (option) setPendingMove(option);
+        } else if (currentActor()?.helmAction === 'Pilot') showTurnInPlacePicker(ship);
         return;
     }
 
@@ -789,7 +867,7 @@ grid.onShipClick = (ship) => {
                     const choices = opt.arcChoices || [];
                     if (choices.length === 1) selectedTargetArcs.set(ship.id, choices[0]);
                 }
-                selectedShots.set(activeWeapon, ship.id);
+                assignGunneryTarget(activeWeapon, ship.id);
                 refreshGunnery?.();
             }
         } else {
@@ -806,7 +884,7 @@ grid.onShipClick = (ship) => {
                     ? candidates.filter(o => !o.arcChoiceRequired || o.arc === selectedTargetArcs.get(ship.id))
                     : candidates;
                 const best = legal.reduce((a, b) => a.range < b.range ? a : b);
-                selectedShots.set(best.weaponIndex, ship.id);
+                assignGunneryTarget(best.weaponIndex, ship.id);
                 activeWeapon = best.weaponIndex;
                 actionPanel.querySelectorAll('.weapon-chip').forEach(c =>
                     c.classList.toggle('active', parseInt(c.dataset.weapon, 10) === activeWeapon));
@@ -828,6 +906,7 @@ grid.onShipClick = (ship) => {
 
 grid.onHexClick = (q, r) => {
     if (!state || state.isComplete) return;
+    if (state.freeAttack) return;
 
     if (state.phase === 'Helm') {
         const options = state.options?.items || [];

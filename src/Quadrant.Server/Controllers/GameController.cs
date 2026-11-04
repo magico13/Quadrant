@@ -70,11 +70,11 @@ public class GameController : ControllerBase
 
         var state = session.State;
         var engine = session.Engine;
-        foreach (var ship in state.Ships) ship.InitializeWeaponUses();
+        foreach (var ship in state.Ships) { ship.InitializeWeaponUses(); ship.InitializeCrewRoles(); }
 
         // Phase-specific helper data for the client UI.
         object? options = null;
-        if (state.Phase == CombatPhase.Helm && state.CurrentActor is not null)
+        if (state.Phase == CombatPhase.Helm && state.CurrentActor is not null && !engine.HasPendingFreeAttack)
             options = new { type = "moves", items = engine.GetValidMoves().Select(m => new { position = new { q = m.Position.Q, r = m.Position.R }, finalFacing = (int)m.FinalFacing, path = m.Path.Select(h => new { q = h.Position.Q, r = h.Position.R }).ToList() }) };
         else if (state.Phase == CombatPhase.Gunnery && state.CurrentActor is not null)
             options = new { type = "targets", items = engine.GetValidTargets() };
@@ -99,6 +99,13 @@ public class GameController : ControllerBase
             actionOrder = state.ActionOrder,
             currentActorIndex = state.CurrentActorIndex,
             currentActorId = state.CurrentActor?.InstanceId,
+            pendingStunt = engine.PendingStunt,
+            freeAttack = engine.FreeAttackShipId is { } defenderId && state.GetShip(defenderId) is { } defender
+                ? new { defenderId, targetId = state.CurrentActor?.InstanceId,
+                    weapons = engine.GetFreeAttackWeapons().Select(i => new { index = i, name = defender.Weapons[i].Name, arc = defender.Weapons[i].Arc }),
+                    gunners = defender.CrewRoles.Select((role, i) => (role, i)).Where(x => x.role == "Gunner")
+                        .Select(x => new { index = x.i, bonus = defender.CrewBonus(x.i, "gunnery", "Gunner") }) }
+                : null,
             firedWeaponIndices = engine.FiredWeaponIndices,
             winner = state.Winner,
             isComplete = state.IsComplete,
@@ -106,6 +113,8 @@ public class GameController : ControllerBase
             {
                 id = s.InstanceId,
                 name = s.Name,
+                tier = s.Definition.Tier,
+                size = s.Definition.Size,
                 teamId = s.TeamId,
                 q = s.Position.Q,
                 r = s.Position.R,
@@ -120,6 +129,23 @@ public class GameController : ControllerBase
                 isDisabled = s.IsDisabled,
                 shields = new { forward = s.Shields.Forward, starboard = s.Shields.Starboard, aft = s.Shields.Aft, port = s.Shields.Port },
                 maxShield = s.Definition.Shields.Forward, // client uses this for arc opacity scaling
+                crew = s.Definition.Crew.Select((c, i) =>
+                {
+                    string role = s.CrewRoles[i];
+                    string? skill = role switch
+                    {
+                        "Pilot" => "piloting",
+                        "Gunner" => "gunnery",
+                        "Engineer" => "engineering",
+                        "Science Officer" => "computers",
+                        _ => null
+                    };
+                    return new { primaryRole = c.Role, role, ranks = c.Ranks, skills = c.Skills,
+                        roleBonus = skill is null ? (int?)null : s.CrewBonus(i, skill, role) };
+                }),
+                helmAction = s.Definition.Crew.Count == 0 || s.CrewRoles.Contains("Pilot") ? "Pilot" : s.AvailableMinorCrew() >= 0 ? "Glide" : "None",
+                gunneryAction = s.Definition.Crew.Count == 0 || s.AvailableGunner() >= 0 ? "Gunner" : !s.GunnerActionTaken && s.AvailableMinorCrew() >= 0 ? "Snap Shot" : "None",
+                crewShotsRemaining = s.RemainingGunneryActions(),
                 weapons = s.Weapons.Select((w, i) => new { name = w.Name, arc = w.Arc, minRange = w.MinRange, rangeIncrement = w.RangeIncrement, maxFireRange = w.MaxFireRange, damage = w.Damage.ToString(), type = w.Type, projectileSpeed = w.ProjectileSpeed, limitedFireUses = w.LimitedFireUses, usesRemaining = s.WeaponUsesRemaining[i] }),
                 damagedSystems = s.DamagedSystems
             }),
@@ -144,15 +170,17 @@ public class GameController : ControllerBase
         return ok ? Ok(new { ok }) : BadRequest(new { error = "Cannot start combat." });
     }
 
-    /// <summary>Engineering: repair hull on a ship (amount 0-3 typical).</summary>
-    [HttpPost("{roomCode}/engineering")]
-    public IActionResult Engineering(string roomCode, [FromBody] EngineeringRequest req)
+    /// <summary>Commit crew roles for all active ships at the start of the round.</summary>
+    [HttpPost("{roomCode}/roles")]
+    public IActionResult AssignRoles(string roomCode, [FromBody] RoleAssignmentsRequest req)
     {
         var session = _sessions.Get(roomCode);
         if (session is null) return NotFound(new { error = "Game not found." });
-
-        session.Engine.ApplyEngineering(req.ShipId, new RepairAction(req.Amount));
-        return Ok(new { ok = true });
+        if (req.Ships is null || req.Ships.Any(s => s.Roles is null) || req.Ships.Select(s => s.ShipId).Distinct().Count() != req.Ships.Count)
+            return BadRequest(new { error = "Invalid role assignments." });
+        var assignments = req.Ships.ToDictionary(s => s.ShipId, s => (IReadOnlyList<string>)s.Roles);
+        var error = session.Engine.AssignRoles(assignments);
+        return error is null ? Ok(new { ok = true }) : BadRequest(new { error });
     }
 
     /// <summary>Advances out of the Engineering phase into Helm.</summary>
@@ -206,6 +234,26 @@ public class GameController : ControllerBase
             : BadRequest(new { error = result.Error });
     }
 
+    [HttpPost("{roomCode}/stunt")]
+    public IActionResult StartStunt(string roomCode, [FromBody] StuntRequest req)
+    {
+        var session = _sessions.Get(roomCode);
+        if (session is null) return NotFound(new { error = "Game not found." });
+        var result = session.Engine.StartStunt(req.Stunt);
+        return result.IsValid ? Ok(new { ok = true }) : BadRequest(new { error = result.Error });
+    }
+
+    [HttpPost("{roomCode}/free-attack")]
+    public IActionResult FreeAttack(string roomCode, [FromBody] FreeAttackRequest req)
+    {
+        var session = _sessions.Get(roomCode);
+        if (session is null) return NotFound(new { error = "Game not found." });
+        var error = session.Engine.ResolveFreeAttack(req.WeaponIndex, req.GunnerIndex);
+        if (error is not null) return BadRequest(new { error });
+        AdvanceUnavailableGunneryTurns(session.Engine);
+        return Ok(new { ok = true });
+    }
+
     /// <summary>Gunnery: resolve one weapon's attack roll now; damage waits until the phase ends.</summary>
     [HttpPost("{roomCode}/fire")]
     public IActionResult Fire(string roomCode, [FromBody] FireShotRequest req)
@@ -249,7 +297,10 @@ public class GameController : ControllerBase
 }
 
 public sealed record StartGameRequest(List<ShipSelection>? Selections);
-public sealed record EngineeringRequest(string ShipId, int Amount);
 public sealed record MoveRequest(int Q, int R, int Facing);
+public sealed record StuntRequest(string Stunt);
+public sealed record FreeAttackRequest(int? WeaponIndex, int? GunnerIndex);
 public sealed record TurnInPlaceRequest(int Facing);
 public sealed record FireShotRequest(int WeaponIndex, string TargetShipId, string? Arc = null);
+public sealed record RoleAssignmentsRequest(List<ShipRolesRequest> Ships);
+public sealed record ShipRolesRequest(string ShipId, List<string> Roles);

@@ -9,4 +9,8 @@ services:
     volumes:
       # Live UI: edits to wwwroot are picked up on browser refresh, no rebuild.
       - ./src/Quadrant.Server/wwwroot:/app/wwwroot:ro
+      - quadrant-data:/app/data
     restart: unless-stopped
+
+volumes:
+  quadrant-data:

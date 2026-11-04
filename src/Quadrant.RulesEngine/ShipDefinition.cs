@@ -15,6 +15,9 @@ public sealed record ShipDefinition
     /// <summary>Starship tier (e.g. 0.33, 1, 2, 3). Used for balance reference.</summary>
     public double Tier { get; init; } = 1;
 
+    /// <summary>Published size category, when available.</summary>
+    public string? Size { get; init; }
+
     /// <summary>Speed in hexes per round.</summary>
     public int Speed { get; init; } = 8;
 
@@ -50,6 +53,13 @@ public sealed record ShipDefinition
 
     /// <summary>The weapons this ship carries.</summary>
     public IReadOnlyList<Weapon> Weapons { get; init; } = [];
+
+    /// <summary>Power-core output, used by engineering shield diversion.</summary>
+    public int PowerCorePcu { get; init; }
+
+    /// <summary>Published complement and fixed starting crew roles.</summary>
+    public int? Complement { get; init; }
+    public IReadOnlyList<CrewDefinition> Crew { get; init; } = [];
 
     // --- Crew skill values (simplified for v1: flat numbers, not per-character) ---
 
@@ -119,6 +129,8 @@ public sealed record ShipDefinition
         };
     }
 }
+
+public sealed record CrewDefinition(string Role, IReadOnlyDictionary<string, int> Skills, int Ranks = 1);
 
 /// <summary>
 /// Shield points for each of the four quadrants. Mutable at runtime (a ship's

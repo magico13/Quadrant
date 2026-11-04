@@ -390,7 +390,8 @@ html, body {
 .detail-weapon.dw-hoverable:hover { background: rgba(79, 195, 247, 0.1); border-color: var(--panel-border); }
 .detail-weapon.dw-pinned { background: rgba(79, 195, 247, 0.18); border-color: var(--accent); }
 
-.detail-list { list-style: none; font-size: 12px; color: #ffab91; }
+.detail-list { list-style: none; font-size: 12px; }
+.detail-list-damaged { color: #ffab91; }
 .detail-list li { padding: 2px 0; }
 
 .ship-status {

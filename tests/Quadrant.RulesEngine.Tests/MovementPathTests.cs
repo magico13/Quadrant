@@ -2,6 +2,70 @@ namespace Quadrant.RulesEngine.Tests;
 
 public class MovementPathTests
 {
+    [Fact]
+    public void RoutePrefersLongerPathThatAvoidsEnemyHex()
+    {
+        var definition = new ShipDefinition { Id = "mover", Name = "Mover", Speed = 4, Maneuverability = Maneuverability.Perfect,
+            HullPoints = 100, Shields = new QuadrantShields() };
+        var mover = definition.Instantiate("mover", new Hex(0, 0), Facing.East, 0);
+        var enemy = definition.Instantiate("enemy", new Hex(1, 0), Facing.West, 1);
+        var engine = MakeHelmEngine(mover, enemy);
+        var option = Assert.Single(engine.GetValidMoves(), m => m.Position == new Hex(2, 0) && m.FinalFacing == Facing.East);
+        Assert.DoesNotContain(option.Path, step => step.Position == enemy.Position);
+        Assert.True(option.Path.Zip(option.Path.Skip(1)).Count(pair => pair.First.Position != pair.Second.Position) > 2);
+    }
+
+    [Fact]
+    public void PassingEnemyOffersFreeAttackAgainstAftWithoutSpendingGunnerAction()
+    {
+        var gun = new Weapon { Name = "Aft Cannon", Arc = FiringArc.Aft, Damage = DamageExpression.From("3") };
+        var attackerDef = new ShipDefinition { Id = "enemy", Name = "Enemy", Shields = new QuadrantShields(), Weapons = [gun],
+            Crew = [new CrewDefinition("Gunner", new Dictionary<string, int> { ["gunnery"] = 30 })] };
+        var mover = MakeShip(speed: 3, position: new Hex(0, 0), facing: Facing.East, id: "mover");
+        mover.Shields.Aft = 10;
+        var enemy = attackerDef.Instantiate("enemy", new Hex(1, 0), Facing.East, 1);
+        enemy.CrewActionsUsed.Add(0);
+        var engine = MakeHelmEngine(mover, enemy);
+        Assert.True(engine.TryMoveTo(new Hex(3, 0), Facing.East).IsValid);
+        Assert.Equal("enemy", engine.FreeAttackShipId);
+        Assert.Equal(new Hex(1, 0), mover.Position);
+        Assert.Single(engine.GetFreeAttackWeapons());
+        Assert.Null(engine.ResolveFreeAttack(0, 0));
+        Assert.Equal(7, mover.Shields.Aft);
+        Assert.Equal(new Hex(3, 0), mover.Position);
+        Assert.Single(enemy.CrewActionsUsed);
+        Assert.Contains(engine.LastEvents, e => e.Message.Contains("free attack") && e.Message.Contains("HIT"));
+    }
+
+    [Fact]
+    public void EnemyWithoutGunnerDoesNotGetFreeAttack()
+    {
+        var mover = MakeShip(speed: 3, position: new Hex(0, 0), facing: Facing.East, id: "mover");
+        var enemy = MakeShip(speed: 1, position: new Hex(1, 0), facing: Facing.East, id: "enemy");
+        enemy.TeamId = 1;
+        var engine = MakeHelmEngine(mover, enemy);
+        Assert.True(engine.TryMoveTo(new Hex(3, 0), Facing.East).IsValid);
+        Assert.Null(engine.FreeAttackShipId);
+        Assert.Equal(new Hex(3, 0), mover.Position);
+    }
+
+    [Fact]
+    public void FreeAttackCanBeDeclinedAndDoesNotSpendAmmunition()
+    {
+        var weapon = new Weapon { Name = "Cannon", Arc = FiringArc.Port, Damage = DamageExpression.From("3"), LimitedFireUses = 2 };
+        var definition = new ShipDefinition { Id = "enemy", Name = "Enemy", Shields = new QuadrantShields(), Weapons = [weapon],
+            Crew = [new CrewDefinition("Gunner", new Dictionary<string, int> { ["gunnery"] = 5 })] };
+        var mover = MakeShip(speed: 3, position: new Hex(0, 0), facing: Facing.East, id: "mover");
+        var enemy = definition.Instantiate("enemy", new Hex(1, 0), Facing.West, 1);
+        var engine = MakeHelmEngine(mover, enemy);
+        Assert.True(engine.TryMoveTo(new Hex(3, 0), Facing.East).IsValid);
+        Assert.True(engine.HasPendingFreeAttack);
+        Assert.Null(engine.ResolveFreeAttack(null));
+        Assert.False(engine.HasPendingFreeAttack);
+        Assert.Equal(new Hex(3, 0), mover.Position);
+        Assert.Equal(2, enemy.WeaponUsesRemaining[0]);
+        Assert.Empty(enemy.CrewActionsUsed);
+    }
     private static ShipInstance MakeShip(int speed = 4, Hex? position = null, Facing facing = Facing.East, string id = "test-ship")
     {
         var def = new ShipDefinition

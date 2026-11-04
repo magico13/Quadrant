@@ -10,6 +10,9 @@ public sealed class GameSession
 {
     public required GameState State { get; init; }
     public required CombatEngine Engine { get; init; }
+    public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset LastActionAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public SemaphoreSlim Gate { get; } = new(1, 1);
 
     /// <summary>The 6-character room code.</summary>
     public string RoomCode => State.RoomCode;
@@ -20,7 +23,7 @@ public sealed class GameSession
     /// <summary>
     /// Creates a new session with a generated room code and the given ships.
     /// </summary>
-    public static GameSession Create(string gameId, IReadOnlyList<ShipInstance> ships)
+    public static GameSession Create(string gameId, IReadOnlyList<ShipInstance> ships, IDiceRoller? dice = null)
     {
         var state = new GameState
         {
@@ -29,8 +32,7 @@ public sealed class GameSession
         };
         state.Ships.AddRange(ships);
 
-        var dice = new DiceRoller(); // unseeded: live play is non-deterministic
-        var engine = new CombatEngine(state, dice);
+        var engine = new CombatEngine(state, dice ?? new DiceRoller());
         return new GameSession { State = state, Engine = engine };
     }
 

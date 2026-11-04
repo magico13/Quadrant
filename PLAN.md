@@ -11,14 +11,14 @@ docker compose restart server   # restart
 docker compose down             # stop
 ```
 
-Server listens on port **5180**. Ship and weapon definitions are loaded from JSON files at startup; sessions are in memory. There is no SQLite persistence yet — add a volume for the `.db` file when it lands.
+Server listens on port **5180**. Ship and weapon definitions are loaded from JSON files at startup. Game sessions are stored in SQLite, with a Docker volume for persistence.
 
 ## Current State
 - A playable hotseat combat loop is in place, with server-side rules, room codes, and a browser client.
 - The working tree contains uncommitted catalog and fleet setup work: ship and weapon JSON files, startup loading, a catalog API, and a UI for selecting ships for each team. This work has not yet been committed.
 - Six ship definitions and a larger weapon catalog are present. Limited Fire and tracking projectiles are implemented; other weapon special tags remain catalog data.
 - Tracking projectiles now use catalog speed, acquire against TL, home each gunnery phase, and impact using normal shields/hull/critical rules.
-- Ship editing and SQLite persistence, per-player access and hidden information, and real-time synchronization remain future work. The architecture and v1 scope below describe targets, not all current implementation.
+- Ship editing, per-player access and hidden information, and real-time synchronization remain future work. The architecture and v1 scope below describe targets, not all current implementation.
 
 ## TODO — Completed
 - [x] **Movement confirmation step (client).** Helm moves preview first: ghost ship + Confirm/Cancel panel. `game.js` (`pendingMove`, `setPendingMove()`, `confirmMove()`) + `hex.js` (`setGhost()`).
@@ -39,7 +39,7 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 - [ ] Model crew, roles, role changes, action limits, skills, Resolve, minor actions and crew casualties.
 - [ ] Implement crew actions, stunts, system damage effects and engineering repairs.
 - [ ] Implement remaining tracking weapon and special property rules using the relevant linked rules.
-- [ ] Playtest the completed hotseat combat loop; ship editing and SQLite remain separate content work.
+- [ ] Playtest the completed hotseat combat loop; ship editing remains separate content work.
 
 ### Multiplayer
 - [ ] **Player login / team assignment.** Keep team identity separate from player identity; initially assign control of teams, with shared teams and control of multiple teams possible later. Room codes remain the way to join.

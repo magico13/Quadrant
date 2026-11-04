@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Quadrant.RulesEngine;
 
 /// <summary>
@@ -8,6 +10,9 @@ public enum CombatPhase
 {
     /// <summary>Pre-combat: ships being placed on the grid.</summary>
     Setup,
+
+    /// <summary>Crew choose their roles at the start of a round.</summary>
+    CrewSetup,
 
     /// <summary>Engineers act (simultaneous). v1: placeholder / skip.</summary>
     Engineering,
@@ -27,6 +32,7 @@ public enum CombatPhase
 /// and broadcasts to clients. It is designed to be serializable so it can be sent
 /// over SignalR and persisted for replay.
 /// </summary>
+[JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
 public sealed class GameState
 {
     /// <summary>Unique identifier for this game session.</summary>
@@ -69,6 +75,7 @@ public sealed class GameState
         => Ships.FirstOrDefault(s => s.InstanceId == instanceId);
 
     /// <summary>The ship currently acting (if any).</summary>
+    [JsonIgnore]
     public ShipInstance? CurrentActor
         => ActionOrder.Count > 0 && CurrentActorIndex < ActionOrder.Count
             ? GetShip(ActionOrder[CurrentActorIndex])

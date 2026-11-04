@@ -33,15 +33,6 @@ public sealed record MoveAction(IReadOnlyList<TurnSegment> Segments)
 public sealed record FireAction(int WeaponIndex, string TargetShipId);
 
 /// <summary>
-/// A player's intent for the Engineering phase. In v1 this is a simple repair.
-/// </summary>
-public sealed record RepairAction(int Amount)
-{
-    /// <summary>Skip engineering (take no action).</summary>
-    public static RepairAction Skip => new(0);
-}
-
-/// <summary>
 /// A player chooses to take no action this phase (e.g. skip firing, or a ship
 /// with no weapons).
 /// </summary>

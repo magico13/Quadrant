@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Quadrant.RulesEngine;
 
 /// <summary>
@@ -6,6 +8,7 @@ namespace Quadrant.RulesEngine;
 /// Mutable: position, facing, hull, shields, and system conditions change as
 /// the battle progresses.
 /// </summary>
+[JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
 public sealed class ShipInstance
 {
     /// <summary>Unique ID for this ship instance within a game (e.g. "ship-1").</summary>
@@ -60,7 +63,53 @@ public sealed class ShipInstance
     public int MaxHullPoints => Definition.HullPoints;
     public int Speed => Definition.Speed;
     public Maneuverability Maneuverability => Definition.Maneuverability;
+    [JsonIgnore]
     public IReadOnlyList<Weapon> Weapons => Definition.Weapons;
+
+    /// <summary>Current roles in the same order as the ship's crew definitions.</summary>
+    public List<string> CrewRoles { get; } = [];
+    public HashSet<int> CrewActionsUsed { get; } = [];
+    public HashSet<int> CrewMinorActionsUsed { get; } = [];
+    public bool GunnerActionTaken { get; set; }
+
+    public int AvailableGunner()
+    {
+        InitializeCrewRoles();
+        for (int i = 0; i < CrewRoles.Count; i++)
+            if (CrewRoles[i] == "Gunner" && !CrewActionsUsed.Contains(i)) return i;
+        return -1;
+    }
+
+    public int RemainingGunneryActions()
+    {
+        InitializeCrewRoles();
+        if (Definition.Crew.Count == 0) return Weapons.Count;
+        int gunners = CrewRoles.Select((role, i) => (role, i)).Count(x => x.role == "Gunner" && !CrewActionsUsed.Contains(x.i));
+        return gunners > 0 ? gunners : !GunnerActionTaken && AvailableMinorCrew() >= 0 ? 1 : 0;
+    }
+
+    public int AvailableMinorCrew()
+    {
+        InitializeCrewRoles();
+        for (int i = 0; i < CrewRoles.Count; i++)
+            if (!CrewMinorActionsUsed.Contains(i)) return i;
+        return -1;
+    }
+
+    public int CrewBonus(int index, string skill, string role)
+    {
+        var crew = Definition.Crew[index];
+        if (crew.Skills.TryGetValue(skill, out int own)) return own;
+        var peer = Definition.Crew.FirstOrDefault(c => c.Role == role && c.Skills.ContainsKey(skill));
+        if (peer is not null) return peer.Skills[skill];
+        return skill == "gunnery" ? crew.Ranks + 3 : 4 + (3 * crew.Ranks / 2);
+    }
+
+    public void InitializeCrewRoles()
+    {
+        if (CrewRoles.Count == 0)
+            CrewRoles.AddRange(Definition.Crew.Select(c => c.Role));
+    }
 
     /// <summary>Remaining Limited Fire uses per mounted weapon; null means unlimited.</summary>
     public List<int?> WeaponUsesRemaining { get; } = [];
@@ -182,6 +231,9 @@ public sealed class ShipInstance
     /// <summary>Resets per-round transient state at the start of a new round.</summary>
     public void BeginRound()
     {
+        CrewActionsUsed.Clear();
+        CrewMinorActionsUsed.Clear();
+        GunnerActionTaken = false;
         RoundAcTlModifier = 0;
         TurnedInPlaceThisRound = false;
     }

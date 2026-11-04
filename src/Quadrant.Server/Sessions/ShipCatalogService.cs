@@ -151,7 +151,7 @@ public class ShipCatalogService
 
     /// <summary>Default fleet uses the same placement rules as selected fleets.</summary>
     public List<ShipInstance> CreateDefaultShips() => CreateShips([
-        new("pegasus", 0), new("compent-aev", 0), new("gorgon", 1)
+        new("deaths-curtain-necrofighter", 0), new("barrow-boneshard", 0), new("grave-casket", 1)
     ]);
 
     private ShipDefinition ToDefinition(ShipJson entry)
@@ -184,6 +184,7 @@ public class ShipCatalogService
             Id = entry.Id,
             Name = entry.Name,
             Tier = entry.Tier,
+            Size = entry.Type?.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault(),
             Speed = entry.Speed,
             Maneuverability = ParseManeuverability(entry.Maneuverability),
             HullPoints = entry.Hp,
@@ -191,6 +192,10 @@ public class ShipCatalogService
             CriticalThreshold = entry.Ct,
             BaseAC = entry.Ac,
             BaseTL = entry.Tl,
+            PowerCorePcu = entry.PowerCore?.Pcu ?? 0,
+            Complement = entry.Complement,
+            Crew = (entry.Crew ?? []).Select(c => new CrewDefinition(c.Role, c.Skills ?? new Dictionary<string, int>(),
+                c.Ranks ?? Math.Max(1, (int)entry.Tier))).ToList(),
             Shields = new QuadrantShields
             {
                 Forward = entry.Shields?.Forward ?? 0,
@@ -249,6 +254,21 @@ public class ShipJson
     public int Ct { get; set; }
     public ShipShieldsJson? Shields { get; set; }
     public List<ShipWeaponRef>? Weapons { get; set; }
+    public ShipPowerCoreJson? PowerCore { get; set; }
+    public int? Complement { get; set; }
+    public List<ShipCrewJson>? Crew { get; set; }
+}
+
+public class ShipPowerCoreJson
+{
+    public int Pcu { get; set; }
+}
+
+public class ShipCrewJson
+{
+    public required string Role { get; set; }
+    public Dictionary<string, int>? Skills { get; set; }
+    public int? Ranks { get; set; }
 }
 
 public class ShipShieldsJson

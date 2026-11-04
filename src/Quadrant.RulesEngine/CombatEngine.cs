@@ -8,6 +8,17 @@ public sealed record CombatEvent(string Phase, string ShipId, string Message)
     public static CombatEvent Info(string phase, string shipId, string msg) => new(phase, shipId, msg);
 }
 
+public sealed record PendingHitSnapshot(string AttackerId, string TargetId, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant);
+public sealed record PendingLaunchSnapshot(TrackingProjectile Projectile, AttackCheckResult Check);
+public sealed record FiredWeaponSnapshot(string ShipId, int WeaponIndex);
+public sealed record TargetArcSnapshot(string ShipId, string TargetId, FiringArc Arc);
+public sealed record CombatEngineSnapshot(
+    List<PendingHitSnapshot> PendingHits, List<PendingLaunchSnapshot> PendingLaunches,
+    List<FiredWeaponSnapshot> FiredWeapons, List<TargetArcSnapshot> TargetArcs,
+    List<CombatEngine.MoveOption>? StuntMoves, string? PendingStunt,
+    CombatEngine.MoveOption? CommittedMove, int MoveStep, Hex LastUnoccupied,
+    Facing LastUnoccupiedFacing, string? FreeAttackShipId, List<CombatEvent> Events);
+
 /// <summary>
 /// The authoritative combat engine. Owns the game state and advances it through
 /// the Engineering → Helm → Gunnery loop. All mutations go through this class so
@@ -24,6 +35,94 @@ public sealed class CombatEngine
     private readonly List<(TrackingProjectile Projectile, AttackCheckResult Check)> _pendingLaunches = [];
     private readonly HashSet<(string ShipId, int WeaponIndex)> _firedWeapons = [];
     private readonly Dictionary<(string ShipId, string TargetId), FiringArc> _targetArcChoices = [];
+    private List<MoveOption>? _stuntMoves;
+    public string? PendingStunt { get; private set; }
+    private MoveOption? _committedMove;
+    private int _moveStep;
+    private Hex _lastUnoccupied;
+    private Facing _lastUnoccupiedFacing;
+    public string? FreeAttackShipId { get; private set; }
+    public bool HasPendingFreeAttack => FreeAttackShipId is not null;
+
+    public IReadOnlyList<int> GetFreeAttackWeapons()
+    {
+        var defender = FreeAttackShipId is null ? null : _state.GetShip(FreeAttackShipId);
+        if (defender is null || defender.IsDestroyed || defender.IsDisabled || CombatResolver.ComputeGunnerBonus(defender) == int.MinValue) return [];
+        defender.InitializeCrewRoles();
+        if (!defender.CrewRoles.Contains("Gunner")) return [];
+        return defender.Weapons.Select((weapon, index) => (weapon, index))
+            .Where(x => x.weapon.Type == WeaponType.DirectFire && defender.HasWeaponUses(x.index))
+            .Select(x => x.index).ToList();
+    }
+
+    public string? ResolveFreeAttack(int? weaponIndex, int? gunnerIndex = null)
+    {
+        var defender = FreeAttackShipId is null ? null : _state.GetShip(FreeAttackShipId);
+        var target = _state.CurrentActor;
+        if (defender is null || target is null || _committedMove is null) return "No free attack is pending.";
+        if (weaponIndex is { } wi)
+        {
+            if (!GetFreeAttackWeapons().Contains(wi)) return "That weapon cannot be used for this free attack.";
+            int gunner = gunnerIndex ?? defender.CrewRoles.IndexOf("Gunner");
+            if (gunner < 0 || gunner >= defender.CrewRoles.Count || defender.CrewRoles[gunner] != "Gunner") return "Select a gunner for the free attack.";
+            defender.ConsumeWeaponUse(wi);
+            var weapon = defender.Weapons[wi];
+            int bonus = defender.CrewBonus(gunner, "gunnery", "Gunner") + defender.Systems.GetActionPenalty(ShipSystem.WeaponsArray) + defender.Systems.PowerCoreGlobalPenalty;
+            int roll = _dice.RollD20();
+            int total = roll + bonus;
+            bool hit = roll == 20 || (roll != 1 && total >= target.CurrentAC);
+            string description = $"{ShipLogName(defender)} fires {weapon.Name} at {ShipLogName(target)} as a free attack: Gunnery {CombatResolver.FormatCheck(roll, bonus, total)} vs AC {target.CurrentAC} — {(hit ? "HIT" : "MISS")}.";
+            if (hit)
+            {
+                var damage = CombatResolver.ApplyDamage(target, Quadrant.Aft, weapon.Damage.Roll(_dice), roll, _dice);
+                description += $" {damage.Description}.";
+            }
+            LastEvents.Add(new CombatEvent("Helm", defender.InstanceId, description));
+        }
+        FreeAttackShipId = null;
+        ContinueCommittedMove();
+        return null;
+    }
+
+    private void ContinueCommittedMove()
+    {
+        var ship = _state.CurrentActor;
+        if (ship is null || _committedMove is null) return;
+        if (ship.IsDisabled || ship.IsDestroyed)
+        {
+            ship.Position = _lastUnoccupied;
+            ship.Facing = _lastUnoccupiedFacing;
+            _committedMove = null;
+            AdvanceActor();
+            return;
+        }
+        while (++_moveStep < _committedMove.Path.Count)
+        {
+            var step = _committedMove.Path[_moveStep];
+            bool moved = ship.Position != step.Position;
+            ship.Position = step.Position;
+            ship.Facing = step.Facing;
+            if (!moved) continue;
+            var occupant = _state.Ships.FirstOrDefault(s => s.InstanceId != ship.InstanceId && !s.IsDestroyed && s.Position == step.Position);
+            if (occupant is null) { _lastUnoccupied = step.Position; _lastUnoccupiedFacing = step.Facing; continue; }
+            if (occupant.TeamId == ship.TeamId) continue;
+            FreeAttackShipId = occupant.InstanceId;
+            if (GetFreeAttackWeapons().Count > 0) return;
+            FreeAttackShipId = null;
+        }
+        LastEvents.Add(new CombatEvent("Helm", ship.InstanceId, $"{ShipLogName(ship)} moves to {ship.Position}, facing {ship.Facing}."));
+        _committedMove = null;
+        AdvanceActor();
+    }
+
+    private void BeginCommittedMove(MoveOption option)
+    {
+        _committedMove = option;
+        _moveStep = 0;
+        _lastUnoccupied = _state.CurrentActor!.Position;
+        _lastUnoccupiedFacing = _state.CurrentActor.Facing;
+        ContinueCommittedMove();
+    }
 
     /// <summary>Events emitted during the last action resolution (for logging/broadcast).</summary>
     public List<CombatEvent> LastEvents { get; } = [];
@@ -35,6 +134,32 @@ public sealed class CombatEngine
     }
 
     public GameState State => _state;
+
+    public CombatEngineSnapshot CaptureSnapshot() => new(
+        _pendingHits.Select(h => new PendingHitSnapshot(h.Attacker.InstanceId, h.Target.InstanceId, h.Weapon, h.Check, h.Quadrant)).ToList(),
+        _pendingLaunches.Select(l => new PendingLaunchSnapshot(l.Projectile, l.Check)).ToList(),
+        _firedWeapons.Select(w => new FiredWeaponSnapshot(w.ShipId, w.WeaponIndex)).ToList(),
+        _targetArcChoices.Select(a => new TargetArcSnapshot(a.Key.ShipId, a.Key.TargetId, a.Value)).ToList(),
+        _stuntMoves, PendingStunt, _committedMove, _moveStep, _lastUnoccupied, _lastUnoccupiedFacing,
+        FreeAttackShipId, LastEvents.ToList());
+
+    public void RestoreSnapshot(CombatEngineSnapshot snapshot)
+    {
+        foreach (var h in snapshot.PendingHits)
+            _pendingHits.Add((_state.GetShip(h.AttackerId) ?? throw new InvalidDataException("Missing attacker in saved game."),
+                _state.GetShip(h.TargetId) ?? throw new InvalidDataException("Missing target in saved game."), h.Weapon, h.Check, h.Quadrant));
+        foreach (var l in snapshot.PendingLaunches) _pendingLaunches.Add((l.Projectile, l.Check));
+        foreach (var w in snapshot.FiredWeapons) _firedWeapons.Add((w.ShipId, w.WeaponIndex));
+        foreach (var a in snapshot.TargetArcs) _targetArcChoices.Add((a.ShipId, a.TargetId), a.Arc);
+        _stuntMoves = snapshot.StuntMoves;
+        PendingStunt = snapshot.PendingStunt;
+        _committedMove = snapshot.CommittedMove;
+        _moveStep = snapshot.MoveStep;
+        _lastUnoccupied = snapshot.LastUnoccupied;
+        _lastUnoccupiedFacing = snapshot.LastUnoccupiedFacing;
+        FreeAttackShipId = snapshot.FreeAttackShipId;
+        LastEvents.AddRange(snapshot.Events);
+    }
 
     public IReadOnlyList<int> FiredWeaponIndices
         => _state.CurrentActor is { } actor
@@ -54,7 +179,8 @@ public sealed class CombatEngine
         if (_state.Phase != CombatPhase.Setup) return false;
         if (_state.Ships.Select(s => s.TeamId).Distinct().Count() < 2) return false;
 
-        _state.Phase = CombatPhase.Engineering;
+        foreach (var ship in _state.Ships) ship.InitializeCrewRoles();
+        _state.Phase = CombatPhase.CrewSetup;
         _state.Round = 1;
         LastEvents.Add(new CombatEvent("Start", "", "Combat begins! Round 1."));
         return true;
@@ -105,7 +231,7 @@ public sealed class CombatEngine
                     int rolledDamage = weapon.Damage.Roll(_dice);
                     var damage = CombatResolver.ApplyDamage(target, quadrant, rolledDamage, check.Roll, _dice);
                     LastEvents.Add(new CombatEvent("Gunnery", attacker.InstanceId,
-                        $"{ShipLogName(attacker)} fires {weapon.Name} at {ShipLogName(target)}: {check.Description} Effects: {damage.Description}."));
+                        $"{ShipLogName(target)} takes damage from {ShipLogName(attacker)}'s {weapon.Name}: {damage.Description}."));
                 }
                 _pendingHits.Clear();
                 _firedWeapons.Clear();
@@ -115,13 +241,43 @@ public sealed class CombatEngine
                 if (!_state.IsComplete)
                 {
                     _state.Round++;
-                    _state.Phase = CombatPhase.Engineering;
+                    _state.Phase = CombatPhase.CrewSetup;
                     foreach (var ship in _state.Ships)
                         ship.BeginRound();
-                    LastEvents.Add(new CombatEvent("Engineering", "", $"Round {_state.Round} — Engineering phase."));
+                    LastEvents.Add(new CombatEvent("CrewSetup", "", $"Round {_state.Round} — assign crew roles."));
                 }
                 break;
         }
+    }
+
+    /// <summary>Validates and commits the active ships' role assignments together.</summary>
+    public string? AssignRoles(IReadOnlyDictionary<string, IReadOnlyList<string>> assignments)
+    {
+        if (_state.Phase != CombatPhase.CrewSetup) return "Crew roles can only change at the start of a round.";
+        var ships = _state.ActiveShips().ToList();
+        if (assignments.Count != ships.Count || ships.Any(s => !assignments.ContainsKey(s.InstanceId)))
+            return "Provide roles for every active ship.";
+        string[] allowed = ["Captain", "Engineer", "Gunner", "Pilot", "Science Officer"];
+        foreach (var ship in ships)
+        {
+            var roles = assignments[ship.InstanceId];
+            if (roles.Count != ship.Definition.Crew.Count || roles.Any(role => !allowed.Contains(role)))
+                return $"Invalid crew roles for {ship.Name}.";
+            if (roles.Count(role => role == "Pilot") > 1 || roles.Count(role => role == "Captain") > 1)
+                return $"{ship.Name} can have only one pilot and one captain.";
+        }
+        foreach (var ship in ships)
+        {
+            ship.CrewRoles.Clear();
+            ship.CrewRoles.AddRange(assignments[ship.InstanceId]);
+            int publishedPilotRanks = ship.Definition.Crew.FirstOrDefault(c => c.Role == "Pilot")?.Ranks ?? 0;
+            int pilotIndex = ship.CrewRoles.IndexOf("Pilot");
+            int currentPilotRanks = pilotIndex >= 0 ? ship.Definition.Crew[pilotIndex].Ranks : 0;
+            ship.RoundAcTlModifier += currentPilotRanks - publishedPilotRanks;
+        }
+        _state.Phase = CombatPhase.Engineering;
+        LastEvents.Add(new CombatEvent("Engineering", "", $"Round {_state.Round} — Engineering phase."));
+        return null;
     }
 
     /// <summary>
@@ -136,10 +292,21 @@ public sealed class CombatEngine
         {
             if (ship.IsDestroyed || ship.IsDisabled) continue;
 
+            ship.InitializeCrewRoles();
+            int pilot = ship.CrewRoles.IndexOf("Pilot");
+            if (ship.Definition.Crew.Count > 0 && pilot < 0)
+            {
+                results.Add((ship.InstanceId, 0));
+                LastEvents.Add(new CombatEvent("Helm", ship.InstanceId, $"{ship.Name} has no pilot; initiative is 0."));
+                continue;
+            }
+
             // Piloting check: 1d20 + speed mod + maneuverability mod + system penalties.
             int roll = _dice.RollD20();
-            int bonus = ship.Definition.SpeedPilotingModifier
+            int bonus = (pilot >= 0 ? ship.CrewBonus(pilot, "piloting", "Pilot") : 0)
+                      + (pilot >= 0 ? 0 : ship.Definition.SpeedPilotingModifier
                       + ship.Definition.ManeuverabilityPilotingModifier
+                      )
                       + ship.Systems.GetActionPenalty(ShipSystem.Engines)
                       + ship.Systems.PowerCoreGlobalPenalty;
 
@@ -156,7 +323,7 @@ public sealed class CombatEngine
         // Sort ascending (lowest moves first). Ties broken by fewer Piloting ranks.
         _state.ActionOrder = results
             .OrderBy(r => r.Roll)
-            .ThenBy(r => _state.GetShip(r.Id)?.Definition.PilotingRanks ?? 0)
+            .ThenBy(r => { var s = _state.GetShip(r.Id); int p = s?.CrewRoles.IndexOf("Pilot") ?? -1; return p >= 0 ? s!.Definition.Crew[p].Ranks : 0; })
             .Select(r => r.Id)
             .ToList();
 
@@ -173,26 +340,39 @@ public sealed class CombatEngine
     /// </summary>
     public MoveValidationResult ApplyMove(MoveAction action)
     {
+        if (HasPendingFreeAttack) return MoveValidationResult.Fail("Resolve the free attack first.");
+        if (PendingStunt is not null) return MoveValidationResult.Fail("Finish the selected stunt first.");
         var ship = _state.CurrentActor;
         if (ship is null || _state.Phase != CombatPhase.Helm)
             return MoveValidationResult.Fail("No ship to move.");
+
+        ship.InitializeCrewRoles();
+        int pilot = ship.CrewRoles.IndexOf("Pilot");
+        if (ship.Definition.Crew.Count > 0 && pilot < 0)
+            return MoveValidationResult.Fail("Use a Glide movement when no pilot is assigned.");
 
         var result = MovementValidator.Validate(ship, action, _state);
         if (!result.IsValid)
             return result;
 
-        // Apply the move.
-        ship.Position = result.FinalPosition!.Value;
-        ship.Facing = result.FinalFacing ?? ship.Facing;
-        LastEvents.Add(new CombatEvent("Helm", ship.InstanceId, $"{ship.Name} moves to {ship.Position}, facing {ship.Facing}."));
+        if (pilot >= 0) ship.CrewActionsUsed.Add(pilot);
 
-        AdvanceActor();
+        var path = new List<PathStep> { new(ship.Position, ship.Facing) };
+        var pos = ship.Position;
+        var facing = ship.Facing;
+        foreach (var segment in action.Segments)
+        {
+            for (int i = 0; i < segment.HexesToMove; i++) { pos = pos.Neighbor(facing); path.Add(new PathStep(pos, facing)); }
+            if (segment.NewFacing is { } next && next != facing) { facing = next; path.Add(new PathStep(pos, facing)); }
+        }
+        BeginCommittedMove(new MoveOption(result.FinalPosition!.Value, result.FinalFacing ?? ship.Facing, path));
         return result;
     }
 
     /// <summary>Skips the current actor's movement (stays in place).</summary>
     public void SkipMove()
     {
+        if (PendingStunt is not null || HasPendingFreeAttack) return;
         var ship = _state.CurrentActor;
         if (ship is null || _state.Phase != CombatPhase.Helm) return;
 
@@ -207,9 +387,15 @@ public sealed class CombatEngine
     /// </summary>
     public MoveValidationResult TryTurnInPlace(Facing facing)
     {
+        if (HasPendingFreeAttack) return MoveValidationResult.Fail("Resolve the free attack first.");
+        if (PendingStunt is not null) return MoveValidationResult.Fail("Finish the selected stunt first.");
         var ship = _state.CurrentActor;
         if (ship is null || _state.Phase != CombatPhase.Helm)
             return MoveValidationResult.Fail("No ship to move.");
+
+        ship.InitializeCrewRoles();
+        if (ship.Definition.Crew.Count > 0 && !ship.CrewRoles.Contains("Pilot"))
+            return MoveValidationResult.Fail("Turning in place requires a pilot; Glide cannot perform stunts.");
 
         // Turning to the direction already faced is a no-op: no stunt, no penalty.
         if (facing == ship.Facing)
@@ -220,6 +406,8 @@ public sealed class CombatEngine
         }
 
         ship.Facing = facing;
+        int pilot = ship.CrewRoles.IndexOf("Pilot");
+        if (pilot >= 0) ship.CrewActionsUsed.Add(pilot);
         ship.TurnedInPlaceThisRound = true;
         LastEvents.Add(new CombatEvent("Helm", ship.InstanceId, $"{ship.Name} turns in place to face {facing}."));
         AdvanceActor();
@@ -238,6 +426,11 @@ public sealed class CombatEngine
         var ship = _state.CurrentActor;
         if (ship is null || _state.Phase != CombatPhase.Gunnery)
             return null;
+
+        int gunner = ship.AvailableGunner();
+        bool snapShot = ship.Definition.Crew.Count > 0 && gunner < 0;
+        int actingCrew = snapShot ? ship.AvailableMinorCrew() : gunner;
+        if (snapShot && (ship.GunnerActionTaken || actingCrew < 0)) return null;
 
         if (action.WeaponIndex < 0 || action.WeaponIndex >= ship.Weapons.Count)
         {
@@ -291,13 +484,25 @@ public sealed class CombatEngine
         if (!_firedWeapons.Add((ship.InstanceId, action.WeaponIndex))) return null;
         ship.ConsumeWeaponUse(action.WeaponIndex);
 
-        var check = CombatResolver.RollAttack(ship, target, weapon, _dice, rollDamage: false);
+        int? crewBonus = actingCrew >= 0 ? ship.CrewBonus(actingCrew, "gunnery", "Gunner") : null;
+        if (crewBonus.HasValue)
+        {
+            int penalty = ship.Systems.GetActionPenalty(ShipSystem.WeaponsArray);
+            crewBonus = penalty == int.MinValue ? int.MinValue : crewBonus.Value + penalty + ship.Systems.PowerCoreGlobalPenalty - (snapShot ? 2 : 0);
+            if (snapShot) ship.CrewMinorActionsUsed.Add(actingCrew);
+            else ship.CrewActionsUsed.Add(actingCrew);
+            ship.GunnerActionTaken = true;
+        }
+        var check = CombatResolver.RollAttack(ship, target, weapon, _dice, gunnerBonus: crewBonus, rollDamage: false);
         if (!check.IsHit)
         {
             LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId,
                 $"{ShipLogName(ship)} fires {weapon.Name} at {ShipLogName(target)}: {check.Description}"));
             return check;
         }
+
+        LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId,
+            $"{ShipLogName(ship)} fires {weapon.Name} at {ShipLogName(target)}: {check.Description}"));
 
         if (weapon.Type == WeaponType.Tracking)
         {
@@ -306,7 +511,7 @@ public sealed class CombatEngine
                 Id = $"projectile-{Guid.NewGuid():N}", Name = ProjectileDisplayName(weapon.Name), TeamId = ship.TeamId,
                 OwnerShipId = ship.InstanceId, TargetShipId = target.InstanceId,
                 Position = ship.Position, Facing = ship.Facing,
-                Speed = weapon.ProjectileSpeed, GunnerBonus = CombatResolver.ComputeGunnerBonus(ship), Weapon = weapon
+                Speed = weapon.ProjectileSpeed, GunnerBonus = (crewBonus ?? CombatResolver.ComputeGunnerBonus(ship)) + (snapShot ? 2 : 0), Weapon = weapon
             };
             _pendingLaunches.Add((projectile, check));
             return check with { Description = $"{check.Description} Missile acquired; it moves at the end of Gunnery." };
@@ -360,6 +565,54 @@ public sealed class CombatEngine
         return true;
     }
 
+    /// <summary>Attempt Back Off and move directly aft without changing facing.</summary>
+    public MoveValidationResult StartStunt(string stunt)
+    {
+        if (HasPendingFreeAttack) return MoveValidationResult.Fail("Resolve the free attack first.");
+        var ship = _state.CurrentActor;
+        if (ship is null || _state.Phase != CombatPhase.Helm) return MoveValidationResult.Fail("No ship to move.");
+        if (PendingStunt is not null) return MoveValidationResult.Fail("Finish the selected stunt first.");
+        if (stunt is not ("Back Off" or "Flip and Burn")) return MoveValidationResult.Fail("Unknown stunt.");
+        ship.InitializeCrewRoles();
+        int pilot = ship.CrewRoles.IndexOf("Pilot");
+        if (pilot < 0 || ship.CrewActionsUsed.Contains(pilot)) return MoveValidationResult.Fail("The stunt requires an available pilot.");
+        if (ship.Systems.Get(ShipSystem.Engines) is SystemCondition.Malfunctioning or SystemCondition.Wrecked)
+            return MoveValidationResult.Fail("Stunts are push actions and require working engines.");
+        if (stunt == "Back Off")
+        {
+            int aft = ((int)ship.Facing + 3) % 6;
+            bool hasDestination = Enumerable.Range(1, ship.Speed / 2).Any(distance =>
+                !_state.Ships.Any(s => s.InstanceId != ship.InstanceId && !s.IsDestroyed && s.Position == ship.Position.Step(aft, distance)));
+            if (!hasDestination) return MoveValidationResult.Fail("Back Off requires an unoccupied destination at least one hex aft.");
+        }
+
+        int penalty = ship.Systems.GetActionPenalty(ShipSystem.Engines);
+        int roll = _dice.RollD20();
+        int bonus = ship.CrewBonus(pilot, "piloting", "Pilot") + (penalty == int.MinValue ? 0 : penalty) + ship.Systems.PowerCoreGlobalPenalty;
+        int dc = (int)Math.Floor((stunt == "Back Off" ? 10 : 15) + 1.5 * ship.Definition.Tier);
+        int total = roll + bonus;
+        bool failedByFive = penalty == int.MinValue || total <= dc - 5;
+        bool failed = penalty == int.MinValue || total < dc;
+        int half = ship.Speed / 2;
+        int minimum = stunt == "Back Off" ? (failedByFive ? 0 : 1) : 0;
+        int maximum = stunt == "Back Off" ? (failedByFive ? 0 : failed ? 1 : half) : half;
+        int direction = stunt == "Back Off" ? ((int)ship.Facing + 3) % 6 : (int)ship.Facing;
+        Facing endFacing = stunt == "Flip and Burn" && !failed ? (Facing)(((int)ship.Facing + 3) % 6) : ship.Facing;
+        var occupied = _state.Ships.Where(s => s.InstanceId != ship.InstanceId && !s.IsDestroyed).Select(s => s.Position).ToHashSet();
+        _stuntMoves = Enumerable.Range(minimum, Math.Max(0, maximum - minimum + 1))
+            .Select(distance => new MoveOption(ship.Position.Step(direction, distance), endFacing,
+                Enumerable.Range(0, distance + 1).Select(step => new PathStep(ship.Position.Step(direction, step), step == distance ? endFacing : ship.Facing)).ToList()))
+            .Where(option => !occupied.Contains(option.Position)).ToList();
+        if (_stuntMoves.Count == 0)
+            _stuntMoves.Add(new MoveOption(ship.Position, ship.Facing, [new PathStep(ship.Position, ship.Facing)]));
+        if (stunt == "Back Off" && failedByFive) ship.RoundAcTlModifier -= 4;
+        ship.CrewActionsUsed.Add(pilot);
+        PendingStunt = stunt;
+        LastEvents.Add(new CombatEvent("Helm", ship.InstanceId,
+            $"{ShipLogName(ship)} attempts {stunt}: {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(stunt == "Back Off" && failedByFive ? "FAIL by 5 or more; AC and TL -4" : failed ? "FAIL" : "SUCCESS")}."));
+        return MoveValidationResult.Ok(ship.Position, ship.Facing);
+    }
+
     /// <summary>Skips the current actor's firing (no weapons or choosing not to fire).</summary>
     public void SkipFire()
     {
@@ -373,22 +626,6 @@ public sealed class CombatEngine
     // ────────────────────────────────────────────────
     //  Engineering phase (v1: simple repair or skip)
     // ────────────────────────────────────────────────
-
-    /// <summary>
-    /// Applies an engineering action for a ship. In v1 this is just hull repair.
-    /// </summary>
-    public void ApplyEngineering(string shipId, RepairAction action)
-    {
-        var ship = _state.GetShip(shipId);
-        if (ship is null || _state.Phase != CombatPhase.Engineering) return;
-
-        if (action.Amount > 0)
-        {
-            int repaired = Math.Min(action.Amount, ship.Definition.HullPoints - ship.HullPoints);
-            ship.HullPoints += repaired;
-            LastEvents.Add(new CombatEvent("Engineering", shipId, $"{ship.Name} repairs {repaired} hull."));
-        }
-    }
 
     /// <summary>
     /// Advances out of the Engineering phase once all ships have acted (or chosen to skip).
@@ -420,8 +657,11 @@ public sealed class CombatEngine
         var ship = requestedShip ?? _state.CurrentActor;
         if (ship is null || (requestedShip is null && _state.Phase != CombatPhase.Helm)) return new();
 
-        int speed = ship.Speed;
-        int minBetweenTurns = ship.Definition.DistanceBetweenTurns;
+        ship.InitializeCrewRoles();
+        bool glide = requestedShip is null && ship.Definition.Crew.Count > 0 && !ship.CrewRoles.Contains("Pilot");
+        if (glide && ship.AvailableMinorCrew() < 0) return new();
+        int speed = glide ? ship.Speed / 2 : ship.Speed;
+        int minBetweenTurns = ship.Definition.DistanceBetweenTurns + (glide ? 2 : 0);
         var occupied = new HashSet<Hex>(_state.Ships
             .Where(s => s.InstanceId != ship.InstanceId && !s.IsDestroyed)
             .Select(s => s.Position));
@@ -430,84 +670,60 @@ public sealed class CombatEngine
         // maxConsecutiveTurns: perfect maneuverability allows 2 turns at a single point; others allow 1.
         int maxConsecutiveTurns = minBetweenTurns == 0 ? 2 : 1;
 
-        var visited = new HashSet<(Hex, Facing, int, int)>();
-        var parent = new Dictionary<(Hex, Facing, int, int), (Hex, Facing, int, int)?>();
-        var queue = new Queue<(Hex Pos, Facing Facing, int Remaining, int SinceTurn, int ConsecTurns)>();
-
-        // Seed sinceTurn = 0: you must move minBetweenTurns hexes before your first turn.
-        // Turning without moving is only possible via the Turn In Place stunt (separate action).
-        var seed = (ship.Position, ship.Facing, 0, 0);
-        queue.Enqueue((ship.Position, ship.Facing, speed, 0, 0));
-        visited.Add(seed);
-        parent[seed] = null;
-
-        while (queue.Count > 0)
+        // Keep remaining speed in the state: a safer route may be longer but
+        // still leave enough movement to reach the requested destination.
+        var enemies = requestedShip is null
+            ? _state.Ships.Where(s => s.TeamId != ship.TeamId && !s.IsDestroyed).Select(s => s.Position).ToHashSet()
+            : new HashSet<Hex>();
+        var seed = (Pos: ship.Position, Facing: ship.Facing, Remaining: speed, SinceTurn: 0, Turns: 0);
+        var queue = new PriorityQueue<(Hex Pos, Facing Facing, int Remaining, int SinceTurn, int Turns), (int Exposures, int Steps)>();
+        var costs = new Dictionary<(Hex Pos, Facing Facing, int Remaining, int SinceTurn, int Turns), (int Exposures, int Steps)> { [seed] = (0, 0) };
+        var parents = new Dictionary<(Hex Pos, Facing Facing, int Remaining, int SinceTurn, int Turns), (Hex Pos, Facing Facing, int Remaining, int SinceTurn, int Turns)?> { [seed] = null };
+        queue.Enqueue(seed, (0, 0));
+        while (queue.TryDequeue(out var current, out var cost))
         {
-            var (pos, facing, remaining, sinceTurn, consecTurns) = queue.Dequeue();
-            var stateKey = (pos, facing, sinceTurn, consecTurns);
-
-            // Move forward one hex in the current facing.
-            if (remaining > 0)
+            if (cost != costs[current]) continue;
+            void Visit((Hex Pos, Facing Facing, int Remaining, int SinceTurn, int Turns) next, bool moved)
             {
-                var nextPos = pos.Neighbor((int)facing);
-                int ns = sinceTurn + 1;
-                var nextKey = (nextPos, facing, ns, 0);
-                if (visited.Add(nextKey))
-                {
-                    parent[nextKey] = stateKey;
-                    queue.Enqueue((nextPos, facing, remaining - 1, ns, 0));
-                }
+                var nextCost = (cost.Exposures + (moved && enemies.Contains(next.Pos) ? 1 : 0), cost.Steps + 1);
+                if (costs.TryGetValue(next, out var previous) && previous.CompareTo(nextCost) <= 0) return;
+                costs[next] = nextCost;
+                parents[next] = current;
+                queue.Enqueue(next, nextCost);
             }
-
-            // Turn in place: ±60°, gated by distance-between-turns and consecutive-turn cap.
-            if (consecTurns < maxConsecutiveTurns && (minBetweenTurns == 0 || sinceTurn >= minBetweenTurns))
-            {
-                foreach (var d in new[] { 1, -1 })
-                {
-                    var nf = (Facing)(((int)facing + d + 6) % 6);
-                    var turnKey = (pos, nf, 0, consecTurns + 1);
-                    if (visited.Add(turnKey))
-                    {
-                        parent[turnKey] = stateKey;
-                        queue.Enqueue((pos, nf, remaining, 0, consecTurns + 1));
-                    }
-                }
-            }
+            if (current.Remaining > 0)
+                Visit((current.Pos.Neighbor((int)current.Facing), current.Facing, current.Remaining - 1,
+                    Math.Min(minBetweenTurns, current.SinceTurn + 1), 0), true);
+            if (current.Turns < maxConsecutiveTurns && (minBetweenTurns == 0 || current.SinceTurn >= minBetweenTurns))
+                foreach (int delta in new[] { 1, -1 })
+                    Visit((current.Pos, (Facing)(((int)current.Facing + delta + 6) % 6), current.Remaining, 0, current.Turns + 1), false);
         }
 
-        // For each reachable (pos, facing) outcome, keep the shortest route that reaches it.
-        // Each step records the hex AND the facing while on it, so in-place turns are preserved
-        // and the client can render where the ship turned.
         var result = new Dictionary<(Hex Pos, Facing Facing), List<PathStep>>();
-        foreach (var stateKey in parent.Keys)
+        var bestCosts = new Dictionary<(Hex Pos, Facing Facing), (int Exposures, int Steps)>();
+        foreach (var entry in costs)
         {
-            var (pos, facing, _, _) = stateKey;
-            if (occupied.Contains(pos) && pos != allowOccupiedTarget) continue; // missiles may end on their target hex
-
-            // Walk the parent chain back to the seed to get the route.
-            var raw = new List<(Hex Pos, Facing Facing)>();
-            (Hex, Facing, int, int)? cur = stateKey;
-            while (cur != null)
+            var stateKey = entry.Key;
+            if (occupied.Contains(stateKey.Pos) && stateKey.Pos != allowOccupiedTarget) continue;
+            var destination = (stateKey.Pos, stateKey.Facing);
+            if (bestCosts.TryGetValue(destination, out var best) && best.CompareTo(entry.Value) <= 0) continue;
+            var path = new List<PathStep>();
+            (Hex Pos, Facing Facing, int Remaining, int SinceTurn, int Turns)? cursor = stateKey;
+            while (cursor is { } step)
             {
-                raw.Add((cur.Value.Item1, cur.Value.Item2));
-                cur = parent[cur.Value];
+                path.Add(new PathStep(step.Pos, step.Facing));
+                cursor = parents[step];
             }
-            raw.Reverse();
-
-            var path = new List<PathStep>(raw.Count);
-            foreach (var (p, f) in raw)
-                path.Add(new PathStep(p, f));
-
-            if (!result.TryGetValue((pos, facing), out var existing) || path.Count < existing.Count)
-                result[(pos, facing)] = path;
+            path.Reverse();
+            result[destination] = path;
+            bestCosts[destination] = entry.Value;
         }
-
         return result;
     }
 
     /// <summary>All valid (position, facing) outcomes for the current actor's helm move, with routes.</summary>
     public List<MoveOption> GetValidMoves()
-        => _ComputeReachable().Select(kv => new MoveOption(kv.Key.Pos, kv.Key.Facing, kv.Value)).ToList();
+        => _stuntMoves ?? _ComputeReachable().Select(kv => new MoveOption(kv.Key.Pos, kv.Key.Facing, kv.Value)).ToList();
 
     /// <summary>Returns the next turn-limited route a tracking projectile can make toward its target.</summary>
     public List<PathStep> GetProjectilePreviewPath(TrackingProjectile projectile)
@@ -536,17 +752,41 @@ public sealed class CombatEngine
     /// </summary>
     public MoveValidationResult TryMoveTo(Hex position, Facing facing)
     {
+        if (HasPendingFreeAttack) return MoveValidationResult.Fail("Resolve the free attack first.");
         var ship = _state.CurrentActor;
         if (ship is null || _state.Phase != CombatPhase.Helm)
             return MoveValidationResult.Fail("No ship to move.");
 
-        if (!_ComputeReachable().ContainsKey((position, facing)))
+        if (PendingStunt is not null)
+        {
+            var option = _stuntMoves?.FirstOrDefault(option => option.Position == position && option.FinalFacing == facing);
+            if (option is null)
+                return MoveValidationResult.Fail("That destination is not allowed by the stunt.");
+            string stunt = PendingStunt;
+            PendingStunt = null;
+            _stuntMoves = null;
+            LastEvents.Add(new CombatEvent("Helm", ship.InstanceId, $"{ShipLogName(ship)} begins {stunt}."));
+            BeginCommittedMove(option);
+            return MoveValidationResult.Ok(position, facing);
+        }
+        if (!_ComputeReachable().TryGetValue((position, facing), out var path))
             return MoveValidationResult.Fail("That hex/facing is not reachable with this ship's movement.");
 
-        ship.Position = position;
-        ship.Facing = facing;
-        LastEvents.Add(new CombatEvent("Helm", ship.InstanceId, $"{ship.Name} moves to {position}, facing {facing}."));
-        AdvanceActor();
+        ship.InitializeCrewRoles();
+        if (ship.Definition.Crew.Count > 0)
+        {
+            int pilot = ship.CrewRoles.IndexOf("Pilot");
+            if (pilot >= 0) ship.CrewActionsUsed.Add(pilot);
+            else
+            {
+                int crew = ship.AvailableMinorCrew();
+                if (crew < 0) return MoveValidationResult.Fail("No crew member can glide.");
+                ship.CrewMinorActionsUsed.Add(crew);
+                ship.RoundAcTlModifier += ship.Definition.Crew[crew].Ranks;
+            }
+        }
+
+        BeginCommittedMove(new MoveOption(position, facing, path));
         return MoveValidationResult.Ok(position, facing);
     }
 
@@ -563,6 +803,15 @@ public sealed class CombatEngine
 
         int bonus = CombatResolver.ComputeGunnerBonus(ship);
         if (bonus == int.MinValue) return [];
+        if (ship.Definition.Crew.Count > 0)
+        {
+            int gunner = ship.AvailableGunner();
+            bool snap = gunner < 0;
+            int crew = snap ? ship.AvailableMinorCrew() : gunner;
+            if (crew < 0 || (snap && ship.GunnerActionTaken)) return [];
+            bonus = ship.CrewBonus(crew, "gunnery", "Gunner") + ship.Systems.GetActionPenalty(ShipSystem.WeaponsArray)
+                + ship.Systems.PowerCoreGlobalPenalty - (snap ? 2 : 0);
+        }
         var options = new List<TargetOption>();
         var arcChoices = new Dictionary<string, List<FiringArc>>();
         foreach (var target in _state.ActiveShips().Where(target => target.TeamId != ship.TeamId))

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Quadrant.RulesEngine;
 
 /// <summary>
@@ -28,9 +30,11 @@ public enum ShipSystem
 /// one of four states (None → Glitching → Malfunctioning → Wrecked). When a
 /// system is hit again, its condition escalates by one step.
 /// </summary>
+[JsonObjectCreationHandling(JsonObjectCreationHandling.Populate)]
 public sealed class SystemConditions
 {
     private readonly Dictionary<ShipSystem, SystemCondition> _conditions = new();
+    public Dictionary<ShipSystem, SystemCondition> PersistedConditions => _conditions;
 
     /// <summary>Gets the current condition of a system (None if undamaged).</summary>
     public SystemCondition Get(ShipSystem system)
