@@ -5,6 +5,166 @@ namespace Quadrant.RulesEngine.Tests;
 
 public class CriticalDamageTests
 {
+    [Theory]
+    [InlineData(7, false)]
+    [InlineData(8, true)]
+    public void CriticalThreshold_RequiresDamageToExceedThreshold(int previousDamage, bool critical)
+    {
+        var attacker = MakeShip(Facing.East, new Hex(0, 0));
+        var target = MakeShip(Facing.West, new Hex(1, 0));
+        target.Shields.Forward = 0;
+        target.TotalHullDamageTaken = previousDamage;
+        var result = CombatResolver.ResolveAttack(attacker, target, MakeWeapon(), new ScriptedDice(15, 50));
+        Assert.Equal(critical, result.CriticalScored);
+    }
+
+    [Fact]
+    public void Attack_AppliesRangePenalty()
+    {
+        var attacker = MakeShip(Facing.East, new Hex(0, 0), gunnerBonus: 0);
+        var target = MakeShip(Facing.West, new Hex(4, 0));
+        var result = CombatResolver.ResolveAttack(attacker, target, MakeWeapon(), new ScriptedDice(10, 50));
+        Assert.False(result.IsHit);
+    }
+
+    [Fact]
+    public void NaturalTwenty_HitsEvenWhenTotalIsBelowAc()
+    {
+        var attacker = MakeShip(Facing.East, new Hex(0, 0));
+        var target = MakeShip(Facing.West, new Hex(1, 0));
+        target.Shields.Forward = 0;
+        target = MakeShip(Facing.West, new Hex(1, 0), baseAc: 40);
+
+        var result = CombatResolver.ResolveAttack(attacker, target, MakeWeapon(), new ScriptedDice(20, 50));
+
+        Assert.True(result.IsHit);
+        Assert.Contains("natural 20 hits automatically", result.Description);
+    }
+
+    [Fact]
+    public void NaturalOne_MissesEvenWhenTotalMeetsAc()
+    {
+        var attacker = MakeShip(Facing.East, new Hex(0, 0), gunnerBonus: 30);
+        var target = MakeShip(Facing.West, new Hex(1, 0));
+
+        var result = CombatResolver.ResolveAttack(attacker, target, MakeWeapon(), new ScriptedDice(1, 50));
+
+        Assert.False(result.IsHit);
+    }
+
+    [Fact]
+    public void CheckFormatting_UsesSubtractionForNegativeModifiers()
+    {
+        Assert.Equal("7-3=4", CombatResolver.FormatCheck(7, -3, 4));
+        Assert.Equal("7+3=10", CombatResolver.FormatCheck(7, 3, 10));
+    }
+
+    [Fact]
+    public void Gunnery_ResolvesWeaponsIndividuallyAndLocksFiredWeapon()
+    {
+        var target = MakeShip(Facing.West, new Hex(1, 0), id: "target", teamId: 1);
+        var firstWeapon = MakeWeapon();
+        var secondWeapon = MakeWeapon() with { Name = "Second Cannon" };
+        var attacker = MakeShip(Facing.East, new Hex(0, 0), id: "attacker", teamId: 0, weapons: [firstWeapon, secondWeapon]);
+        var state = new GameState { GameId = "test", RoomCode = "test", Phase = CombatPhase.Gunnery, ActionOrder = [attacker.InstanceId, target.InstanceId] };
+        state.Ships.AddRange([attacker, target]);
+        var engine = new CombatEngine(state, new SequenceDice([1, 15]));
+
+        var first = engine.ApplyFire(new FireAction(0, target.InstanceId));
+        Assert.NotNull(first);
+        Assert.False(first!.IsHit);
+        Assert.Equal(50, target.HullPoints);
+        Assert.Contains(0, engine.FiredWeaponIndices);
+        Assert.DoesNotContain(0, engine.GetValidTargets().Select(o => o.WeaponIndex));
+
+        var second = engine.ApplyFire(new FireAction(1, target.InstanceId));
+        Assert.NotNull(second);
+        Assert.True(second!.IsHit);
+        Assert.Equal(50, target.HullPoints);
+    }
+
+    [Fact]
+    public void ArcBoundary_WithWeaponsInTwoArcs_RequiresOneChoiceAndLocksOtherArc()
+    {
+        var target = MakeShip(Facing.West, new Hex(1, 1), id: "target", teamId: 1);
+        var forward = MakeWeapon() with { Name = "Forward Cannon", Arc = FiringArc.Forward };
+        var starboard = MakeWeapon() with { Name = "Starboard Cannon", Arc = FiringArc.Starboard };
+        var attacker = MakeShip(Facing.East, new Hex(0, 0), id: "attacker", teamId: 0, weapons: [forward, starboard]);
+        var state = new GameState { GameId = "test", RoomCode = "test", Phase = CombatPhase.Gunnery, ActionOrder = ["attacker", "target"] };
+        state.Ships.AddRange([attacker, target]);
+        var engine = new CombatEngine(state, new SequenceDice([15]));
+
+        var options = engine.GetValidTargets();
+        Assert.Equal(2, options.Count);
+        Assert.All(options, option => Assert.True(option.ArcChoiceRequired));
+        Assert.Equal(new[] { FiringArc.Forward, FiringArc.Starboard }, options[0].ArcChoices.Order().ToArray());
+        Assert.Null(engine.ApplyFire(new FireAction(0, "target")));
+
+        Assert.NotNull(engine.ApplyFire(new FireAction(0, "target"), FiringArc.Forward));
+        Assert.DoesNotContain(engine.GetValidTargets(), option => option.TargetShipId == "target" && option.Arc == FiringArc.Starboard);
+    }
+
+    [Fact]
+    public void ArcBoundary_WithOnlyOneAvailableArc_AutoSelectsIt()
+    {
+        var target = MakeShip(Facing.West, new Hex(1, 1), id: "target", teamId: 1);
+        var forward = MakeWeapon() with { Arc = FiringArc.Forward };
+        var attacker = MakeShip(Facing.East, new Hex(0, 0), id: "attacker", teamId: 0, weapons: [forward]);
+        var state = new GameState { GameId = "test", RoomCode = "test", Phase = CombatPhase.Gunnery, ActionOrder = ["attacker", "target"] };
+        state.Ships.AddRange([attacker, target]);
+        var engine = new CombatEngine(state, new SequenceDice([15]));
+
+        var option = Assert.Single(engine.GetValidTargets());
+        Assert.False(option.ArcChoiceRequired);
+        Assert.Single(option.ArcChoices);
+        Assert.NotNull(engine.ApplyFire(new FireAction(0, "target")));
+    }
+
+    [Fact]
+    public void Gunnery_DamageWaitsUntilBothShipsHaveFired()
+    {
+        var first = MakeShip(Facing.East, new Hex(0, 0));
+        var second = MakeShip(Facing.West, new Hex(1, 0));
+        first = MakeArmed(first, "first", 0);
+        second = MakeArmed(second, "second", 1);
+        first.HullPoints = second.HullPoints = 4;
+        first.Shields.Forward = second.Shields.Forward = 0;
+        var state = new GameState { GameId = "test", RoomCode = "test", Phase = CombatPhase.Gunnery, ActionOrder = ["first", "second"] };
+        state.Ships.AddRange([first, second]);
+        var engine = new CombatEngine(state, new ScriptedDice(15, 50));
+        engine.ApplyGunneryTurn([new FireAction(0, "second")]);
+        Assert.Equal(4, second.HullPoints);
+        engine.ApplyGunneryTurn([new FireAction(0, "first")]);
+        Assert.Contains(engine.LastEvents, e => e.Message.Contains("first (Team 1) fires Test Cannon at second (Team 2):") && e.Message.Contains("HIT"));
+        Assert.Contains(engine.LastEvents, e => e.Message.Contains("second (Team 2) fires Test Cannon at first (Team 1):") && e.Message.Contains("HIT"));
+        Assert.DoesNotContain(engine.LastEvents, e => e.Message.Contains("resolving at the end"));
+        Assert.True(first.IsDisabled);
+        Assert.True(second.IsDisabled);
+        Assert.Equal("Mutual destruction", state.Winner);
+    }
+
+    [Fact]
+    public void GunneryLog_NumbersDuplicateShipNames()
+    {
+        var first = MakeArmed(MakeShip(Facing.East, new Hex(0, 0)), "same-1", 0, "Pegasus");
+        var second = MakeArmed(MakeShip(Facing.West, new Hex(1, 0)), "same-2", 1, "Pegasus");
+        var state = new GameState { GameId = "test", RoomCode = "test", Phase = CombatPhase.Gunnery, ActionOrder = ["same-1", "same-2"] };
+        state.Ships.AddRange([first, second]);
+        var engine = new CombatEngine(state, new ScriptedDice(15, 50));
+        engine.ApplyGunneryTurn([new FireAction(0, "same-2")]);
+        engine.ApplyGunneryTurn([new FireAction(0, "same-1")]);
+        Assert.Contains(engine.LastEvents, e => e.Message.Contains("Pegasus #1 (Team 1) fires Test Cannon at Pegasus #2 (Team 2)"));
+        Assert.Contains(engine.LastEvents, e => e.Message.Contains("Pegasus #2 (Team 2) fires Test Cannon at Pegasus #1 (Team 1)"));
+    }
+
+    private static ShipInstance MakeArmed(ShipInstance source, string id, int team, string? name = null)
+    {
+        var definition = new ShipDefinition { Id = id, Name = name ?? id, HullPoints = 50, BaseAC = 12,
+            DamageThreshold = 0, CriticalThreshold = 11, Shields = new QuadrantShields(), Weapons = [MakeWeapon()] };
+        return new ShipInstance { InstanceId = id, Definition = definition, TeamId = team,
+            Position = source.Position, Facing = source.Facing, HullPoints = 50, Shields = new QuadrantShields() };
+    }
+
     /// <summary>
     /// A natural 20 that is fully absorbed by shields must NOT score critical damage.
     /// Per the rules: "A starship takes critical damage from an attack only if that
@@ -80,19 +240,21 @@ public class CriticalDamageTests
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
 
-    private static ShipInstance MakeShip(Facing facing, Hex position)
+    private static ShipInstance MakeShip(Facing facing, Hex position, string id = "test-ship", int teamId = 0, int baseAc = 12, int gunnerBonus = 3, IReadOnlyList<Weapon>? weapons = null)
     {
         var def = new ShipDefinition
         {
-            Id = "test-ship-def",
-            Name = "Test Ship",
+            Id = id,
+            Name = id,
             HullPoints = 50,
             Speed = 10,
             Maneuverability = Maneuverability.Good,
-            BaseAC = 12,
+            BaseAC = baseAc,
             BaseTL = 12,
             DamageThreshold = 0,
             CriticalThreshold = 11,
+            GunnerBaseAttack = gunnerBonus,
+            Weapons = weapons ?? [],
             Shields = new QuadrantShields
             {
                 Forward = 10,
@@ -104,8 +266,9 @@ public class CriticalDamageTests
 
         return new ShipInstance
         {
-            InstanceId = "test-ship",
+            InstanceId = id,
             Definition = def,
+            TeamId = teamId,
             Position = position,
             Facing = facing,
             HullPoints = def.HullPoints,
@@ -125,6 +288,15 @@ public class CriticalDamageTests
     /// <summary>
     /// A deterministic dice roller that returns fixed values.
     /// </summary>
+    private sealed class SequenceDice(IReadOnlyList<int> d20s) : IDiceRoller
+    {
+        private int _index;
+        public int RollD20() => d20s[_index++];
+        public int Roll(int sides) => 1;
+        public int RollMultiple(int count, int sides) => count;
+        public int RollPercent() => 50;
+    }
+
     private sealed class ScriptedDice : IDiceRoller
     {
         private readonly int _d20;

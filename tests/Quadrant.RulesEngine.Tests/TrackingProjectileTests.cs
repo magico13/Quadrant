@@ -1,0 +1,126 @@
+using Quadrant.RulesEngine;
+
+namespace Quadrant.RulesEngine.Tests;
+
+public class TrackingProjectileTests
+{
+    [Fact]
+    public void MissileDamageIsRolledOnlyWhenItReachesItsTarget()
+    {
+        var weapon = new Weapon { Name = "Torpedo Launcher", Arc = FiringArc.Forward, Type = WeaponType.Tracking,
+            ProjectileSpeed = 2, RangeIncrement = 10, Damage = DamageExpression.From("1d6") };
+        var attackerDefinition = new ShipDefinition { Id = "attacker", Name = "Attacker", HullPoints = 20,
+            Shields = new QuadrantShields(), Weapons = [weapon], GunnerBaseAttack = 2, DexterityModifier = 1 };
+        var targetDefinition = new ShipDefinition { Id = "target", Name = "Target", HullPoints = 20,
+            Shields = new QuadrantShields(), BaseTL = 12 };
+        var attacker = attackerDefinition.Instantiate("attacker", new Hex(0, 0), Facing.East, 0);
+        var target = targetDefinition.Instantiate("target", new Hex(4, 0), Facing.West, 1);
+        var state = new GameState { GameId = "test", RoomCode = "test", Phase = CombatPhase.Gunnery,
+            ActionOrder = ["attacker", "target"] };
+        state.Ships.AddRange([attacker, target]);
+        var dice = new CountingDice();
+        var engine = new CombatEngine(state, dice);
+
+        var result = engine.ApplyFire(new FireAction(0, "target"));
+        Assert.NotNull(result);
+        Assert.True(result!.IsHit);
+        Assert.Equal(0, dice.DamageRolls);
+        Assert.Contains("15+3=18", result.Description);
+        engine.EndGunneryTurn();
+        engine.EndGunneryTurn();
+
+        Assert.Single(state.Projectiles);
+        Assert.Equal(0, dice.DamageRolls);
+        Assert.Contains(engine.LastEvents, e => e.Message.Contains("advances 2 hexes toward Target (Team 2). Gunnery: 15+3=18 vs TL 12."));
+
+        state.Phase = CombatPhase.Gunnery;
+        engine.AdvancePhase();
+        Assert.Empty(state.Projectiles);
+        Assert.Equal(1, dice.DamageRolls);
+    }
+
+    [Fact]
+    public void AutomaticEndOnlyAdvancesWhenNoTargetableWeaponsRemain()
+    {
+        var weapon = new Weapon { Name = "Cannon", Arc = FiringArc.Forward, Damage = DamageExpression.From("1d6") };
+        var attackerDefinition = new ShipDefinition { Id = "attacker", Name = "Attacker", HullPoints = 20,
+            Shields = new QuadrantShields(), Weapons = [weapon, weapon] };
+        var targetDefinition = new ShipDefinition { Id = "target", Name = "Target", HullPoints = 20, Shields = new QuadrantShields() };
+        var state = new GameState { GameId = "test", RoomCode = "test", Phase = CombatPhase.Gunnery,
+            ActionOrder = ["attacker", "target"] };
+        state.Ships.Add(attackerDefinition.Instantiate("attacker", new Hex(0, 0), Facing.East, 0));
+        state.Ships.Add(targetDefinition.Instantiate("target", new Hex(1, 0), Facing.West, 1));
+        var dice = new CountingDice();
+        var engine = new CombatEngine(state, dice);
+
+        engine.ApplyFire(new FireAction(0, "target"));
+        Assert.False(engine.AutoEndGunneryTurnIfNoActions());
+        Assert.Equal("attacker", state.CurrentActor?.InstanceId);
+        engine.ApplyFire(new FireAction(1, "target"));
+        Assert.Equal(0, dice.DamageRolls);
+        Assert.True(engine.AutoEndGunneryTurnIfNoActions());
+        Assert.Equal("target", state.CurrentActor?.InstanceId);
+        Assert.True(engine.AutoEndGunneryTurnIfNoActions());
+        Assert.Equal(2, dice.DamageRolls);
+    }
+
+    [Fact]
+    public void PreviewPathMovesAtProjectileSpeedAndFacesAlongItsRoute()
+    {
+        var (projectile, engine) = MakeScenario(new Hex(0, 0), Facing.NorthWest, new Hex(5, 0), speed: 2);
+
+        var path = engine.GetProjectilePreviewPath(projectile);
+
+        Assert.Equal(new Hex(2, 0), path[^1].Position);
+        Assert.Equal(Facing.East, path[^1].Facing);
+        Assert.Equal(2, path.Count(step => step.Position != new Hex(0, 0)));
+    }
+
+    [Fact]
+    public void PreviewRecalculatesRouteTowardTargetsNewPosition()
+    {
+        var (projectile, engine) = MakeScenario(new Hex(0, 0), Facing.East, new Hex(0, -5), speed: 2);
+
+        var path = engine.GetProjectilePreviewPath(projectile);
+
+        Assert.Equal(new Hex(0, -2), path[^1].Position);
+        Assert.Equal(Facing.NorthWest, path[^1].Facing);
+    }
+
+    private static (TrackingProjectile Projectile, CombatEngine Engine) MakeScenario(Hex position, Facing facing, Hex targetPosition, int speed)
+    {
+        var targetDefinition = new ShipDefinition
+        {
+            Id = "target", Name = "Target", HullPoints = 10, Shields = new QuadrantShields()
+        };
+        var target = targetDefinition.Instantiate("target", targetPosition, Facing.West, 1);
+        var state = new GameState { GameId = "test", RoomCode = "test" };
+        state.Ships.Add(target);
+        var projectile = new TrackingProjectile
+        {
+            Id = "projectile-1", Name = "Torpedo", TeamId = 0,
+            OwnerShipId = "attacker", TargetShipId = "target", Position = position,
+            Facing = facing, Speed = speed, GunnerBonus = 0,
+            Weapon = new Weapon { Name = "Torpedo Launcher", Arc = FiringArc.Forward, Damage = DamageExpression.From("1") }
+        };
+        state.Projectiles.Add(projectile);
+        return (projectile, new CombatEngine(state, new Dice()));
+    }
+
+    private sealed class Dice : IDiceRoller
+    {
+        public int RollD20() => 10;
+        public int Roll(int sides) => 1;
+        public int RollMultiple(int count, int sides) => count;
+        public int RollPercent() => 50;
+    }
+
+    private sealed class CountingDice : IDiceRoller
+    {
+        public int DamageRolls { get; private set; }
+        public int RollD20() => 15;
+        public int Roll(int sides) { DamageRolls++; return 1; }
+        public int RollMultiple(int count, int sides) => count;
+        public int RollPercent() => 50;
+    }
+}

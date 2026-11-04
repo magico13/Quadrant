@@ -20,6 +20,10 @@ public sealed class CombatEngine
 {
     private readonly GameState _state;
     private readonly IDiceRoller _dice;
+    private readonly List<(ShipInstance Attacker, ShipInstance Target, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant)> _pendingHits = [];
+    private readonly List<(TrackingProjectile Projectile, AttackCheckResult Check)> _pendingLaunches = [];
+    private readonly HashSet<(string ShipId, int WeaponIndex)> _firedWeapons = [];
+    private readonly Dictionary<(string ShipId, string TargetId), FiringArc> _targetArcChoices = [];
 
     /// <summary>Events emitted during the last action resolution (for logging/broadcast).</summary>
     public List<CombatEvent> LastEvents { get; } = [];
@@ -31,6 +35,11 @@ public sealed class CombatEngine
     }
 
     public GameState State => _state;
+
+    public IReadOnlyList<int> FiredWeaponIndices
+        => _state.CurrentActor is { } actor
+            ? _firedWeapons.Where(x => x.ShipId == actor.InstanceId).Select(x => x.WeaponIndex).ToList()
+            : [];
 
     // ────────────────────────────────────────────────
     //  Round / Phase lifecycle
@@ -71,6 +80,36 @@ public sealed class CombatEngine
                 break;
 
             case CombatPhase.Gunnery:
+                var projectilesAlreadyInFlight = _state.Projectiles.ToList();
+                var alreadyDestroyed = _state.Ships.Where(s => s.IsDestroyed).Select(s => s.InstanceId).ToHashSet();
+                foreach (var projectile in projectilesAlreadyInFlight)
+                {
+                    var target = _state.GetShip(projectile.TargetShipId);
+                    if (target is null || alreadyDestroyed.Contains(target.InstanceId))
+                    {
+                        LastEvents.Add(new CombatEvent("Gunnery", projectile.OwnerShipId, $"{ProjectileLogName(projectile)} loses its target and is removed."));
+                        _state.Projectiles.Remove(projectile);
+                        continue;
+                    }
+                    int roll = _dice.RollD20();
+                    ResolveProjectile(projectile, roll, projectile.GunnerBonus, target.CurrentTL);
+                }
+                foreach (var (projectile, check) in _pendingLaunches)
+                {
+                    _state.Projectiles.Add(projectile);
+                    ResolveProjectile(projectile, check.Roll, check.Modifier, check.DefenseValue);
+                }
+                _pendingLaunches.Clear();
+                foreach (var (attacker, target, weapon, check, quadrant) in _pendingHits)
+                {
+                    int rolledDamage = weapon.Damage.Roll(_dice);
+                    var damage = CombatResolver.ApplyDamage(target, quadrant, rolledDamage, check.Roll, _dice);
+                    LastEvents.Add(new CombatEvent("Gunnery", attacker.InstanceId,
+                        $"{ShipLogName(attacker)} fires {weapon.Name} at {ShipLogName(target)}: {check.Description} Effects: {damage.Description}."));
+                }
+                _pendingHits.Clear();
+                _firedWeapons.Clear();
+                _targetArcChoices.Clear();
                 // End of round — check for victory, then start next round.
                 CheckVictory();
                 if (!_state.IsComplete)
@@ -194,7 +233,7 @@ public sealed class CombatEngine
     /// <summary>
     /// Applies a fire action for the current actor. Resolves the attack and applies damage.
     /// </summary>
-    public AttackResult? ApplyFire(FireAction action)
+    public AttackCheckResult? ApplyFire(FireAction action, FiringArc? chosenArc = null)
     {
         var ship = _state.CurrentActor;
         if (ship is null || _state.Phase != CombatPhase.Gunnery)
@@ -208,24 +247,79 @@ public sealed class CombatEngine
         var weapon = ship.Weapons[action.WeaponIndex];
 
         var target = _state.GetShip(action.TargetShipId);
-        if (target is null || target.IsDestroyed)
+        if (target is null || target.IsDestroyed || target.TeamId == ship.TeamId)
         {
             LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId, $"{ship.Name} has no valid target."));
             return null;
         }
 
-        var result = CombatResolver.ResolveAttack(ship, target, weapon, _dice);
-        LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId, result.Description));
+        int targetRange = ship.Position.DistanceTo(target.Position);
+        double targetAngle = ship.AngleFromFacing(target.Position);
+        if (!weapon.CanTarget(targetRange, targetAngle)) return null;
+        var arcKey = (ship.InstanceId, target.InstanceId);
+        bool sharedBoundary = IsSharedArcBoundary(targetAngle);
+        if (sharedBoundary)
+        {
+            var availableArcs = ship.Weapons.Select((w, i) => (Weapon: w, Index: i))
+                .Where(x => !_firedWeapons.Contains((ship.InstanceId, x.Index)) && ship.HasWeaponUses(x.Index) && x.Weapon.Arc != FiringArc.AllArcs && x.Weapon.CanTarget(targetRange, targetAngle))
+                .Select(x => x.Weapon)
+                .Select(w => w.Arc).Distinct().ToList();
+            bool alreadyChosen = _targetArcChoices.TryGetValue(arcKey, out var existingArc);
+            FiringArc? selectedArc = alreadyChosen ? existingArc : chosenArc;
+            if (selectedArc is null && availableArcs.Count == 1) selectedArc = availableArcs[0];
+            if (selectedArc is null && (weapon.Arc != FiringArc.AllArcs || availableArcs.Count > 0)) return null;
+            if (selectedArc is not null && ((!alreadyChosen && !availableArcs.Contains(selectedArc.Value)) ||
+                (weapon.Arc != FiringArc.AllArcs && weapon.Arc != selectedArc))) return null;
+            if (selectedArc is not null) _targetArcChoices[arcKey] = selectedArc.Value;
+        }
+        else if (_targetArcChoices.TryGetValue(arcKey, out var selectedArc) && weapon.Arc != FiringArc.AllArcs && weapon.Arc != selectedArc)
+        {
+            return null;
+        }
 
-        // In v1 each ship fires all its weapons in sequence during its turn.
-        // For now, one fire action per call; the client sends multiple if needed.
-        return result;
+        if (!ship.HasWeaponUses(action.WeaponIndex))
+        {
+            LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId, $"{ShipLogName(ship)}'s {weapon.Name} is out of ammunition."));
+            return null;
+        }
+
+        if (weapon.Type == WeaponType.Tracking && weapon.ProjectileSpeed <= 0)
+        {
+            LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId, $"{weapon.Name} has no projectile speed configured."));
+            return null;
+        }
+        if (!_firedWeapons.Add((ship.InstanceId, action.WeaponIndex))) return null;
+        ship.ConsumeWeaponUse(action.WeaponIndex);
+
+        var check = CombatResolver.RollAttack(ship, target, weapon, _dice, rollDamage: false);
+        if (!check.IsHit)
+        {
+            LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId,
+                $"{ShipLogName(ship)} fires {weapon.Name} at {ShipLogName(target)}: {check.Description}"));
+            return check;
+        }
+
+        if (weapon.Type == WeaponType.Tracking)
+        {
+            var projectile = new TrackingProjectile
+            {
+                Id = $"projectile-{Guid.NewGuid():N}", Name = ProjectileDisplayName(weapon.Name), TeamId = ship.TeamId,
+                OwnerShipId = ship.InstanceId, TargetShipId = target.InstanceId,
+                Position = ship.Position, Facing = ship.Facing,
+                Speed = weapon.ProjectileSpeed, GunnerBonus = CombatResolver.ComputeGunnerBonus(ship), Weapon = weapon
+            };
+            _pendingLaunches.Add((projectile, check));
+            return check with { Description = $"{check.Description} Missile acquired; it moves at the end of Gunnery." };
+        }
+
+        _pendingHits.Add((ship, target, weapon, check, target.QuadrantOf(ship.Position)));
+        return check with { Description = $"{check.Description} Damage effects apply at the end of Gunnery." };
     }
 
     /// <summary>
-    /// Resolves the current actor's full gunnery turn: fires all specified weapons
-    /// in sequence, then advances to the next actor. This is the primary method
-    /// the server calls when a player submits their firing decisions.
+    /// Resolves the supplied weapons in sequence for compatibility with callers
+    /// that submit a whole turn at once. Interactive play uses ApplyFire once per
+    /// weapon, then EndGunneryTurn when targeting choices are complete.
     /// </summary>
     public List<AttackResult> ApplyGunneryTurn(IReadOnlyList<FireAction> actions)
     {
@@ -238,14 +332,32 @@ public sealed class CombatEngine
         {
             var result = ApplyFire(action);
             if (result is not null)
-                results.Add(result);
+                results.Add(result.IsHit
+                    ? AttackResult.Success(result.CheckTotal, result.DamageRolled, 0, 0, false, null, null, result.Description)
+                    : AttackResult.Miss(result.CheckTotal, result.DefenseValue, result.Description));
         }
 
         if (actions.Count == 0)
             LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId, $"{ship.Name} does not fire."));
 
-        AdvanceActor();
+        EndGunneryTurn();
         return results;
+    }
+
+    /// <summary>Locks in this ship's remaining gunnery choices and advances to the next ship.</summary>
+    public void EndGunneryTurn()
+    {
+        if (_state.Phase != CombatPhase.Gunnery || _state.CurrentActor is null) return;
+        AdvanceActor();
+    }
+
+    /// <summary>Ends the current turn when no implemented gunnery action remains.</summary>
+    public bool AutoEndGunneryTurnIfNoActions()
+    {
+        if (_state.Phase != CombatPhase.Gunnery || _state.CurrentActor is null || GetValidTargets().Count != 0)
+            return false;
+        EndGunneryTurn();
+        return true;
     }
 
     /// <summary>Skips the current actor's firing (no weapons or choosing not to fire).</summary>
@@ -255,7 +367,7 @@ public sealed class CombatEngine
         if (ship is null || _state.Phase != CombatPhase.Gunnery) return;
 
         LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId, $"{ship.Name} does not fire."));
-        AdvanceActor();
+        EndGunneryTurn();
     }
 
     // ────────────────────────────────────────────────
@@ -303,10 +415,10 @@ public sealed class CombatEngine
     /// enforcing speed, distance-between-turns, grid bounds, and no ending on an occupied hex.
     /// Passing through occupied hexes is allowed; only the final position must be clear.
     /// </summary>
-    private Dictionary<(Hex Pos, Facing Facing), List<PathStep>> _ComputeReachable()
+    private Dictionary<(Hex Pos, Facing Facing), List<PathStep>> _ComputeReachable(ShipInstance? requestedShip = null, Hex? allowOccupiedTarget = null)
     {
-        var ship = _state.CurrentActor;
-        if (ship is null || _state.Phase != CombatPhase.Helm) return new();
+        var ship = requestedShip ?? _state.CurrentActor;
+        if (ship is null || (requestedShip is null && _state.Phase != CombatPhase.Helm)) return new();
 
         int speed = ship.Speed;
         int minBetweenTurns = ship.Definition.DistanceBetweenTurns;
@@ -370,7 +482,7 @@ public sealed class CombatEngine
         foreach (var stateKey in parent.Keys)
         {
             var (pos, facing, _, _) = stateKey;
-            if (occupied.Contains(pos)) continue; // can't end on an occupied hex
+            if (occupied.Contains(pos) && pos != allowOccupiedTarget) continue; // missiles may end on their target hex
 
             // Walk the parent chain back to the seed to get the route.
             var raw = new List<(Hex Pos, Facing Facing)>();
@@ -397,6 +509,27 @@ public sealed class CombatEngine
     public List<MoveOption> GetValidMoves()
         => _ComputeReachable().Select(kv => new MoveOption(kv.Key.Pos, kv.Key.Facing, kv.Value)).ToList();
 
+    /// <summary>Returns the next turn-limited route a tracking projectile can make toward its target.</summary>
+    public List<PathStep> GetProjectilePreviewPath(TrackingProjectile projectile)
+    {
+        var target = _state.GetShip(projectile.TargetShipId);
+        if (target is null) return [];
+        var definition = new ShipDefinition
+        {
+            Id = projectile.Id, Name = projectile.Name, Speed = projectile.Speed,
+            Maneuverability = Maneuverability.Perfect, HullPoints = 1,
+            Shields = new QuadrantShields()
+        };
+        var projectileShip = definition.Instantiate(projectile.Id, projectile.Position, projectile.Facing, projectile.TeamId);
+        var routes = _ComputeReachable(projectileShip, target.Position);
+        var route = routes
+            .OrderBy(kv => kv.Key.Pos.DistanceTo(target.Position))
+            .ThenBy(kv => kv.Value.Count)
+            .Select(kv => kv.Value)
+            .FirstOrDefault();
+        return route is null ? [] : route.Skip(1).ToList();
+    }
+
     /// <summary>
     /// Moves the current actor to a specific (position, facing) if it is reachable.
     /// The reachability set already enforces all movement rules, so a hit means valid.
@@ -418,10 +551,10 @@ public sealed class CombatEngine
     }
 
     /// <summary>A weapon that the current actor can fire at a specific target.</summary>
-    public sealed record TargetOption(string WeaponName, string TargetShipId, int Range, int HitChancePercent, int WeaponIndex, int RangePenalty);
+    public sealed record TargetOption(string WeaponName, string TargetShipId, int Range, int HitChancePercent, int WeaponIndex, int RangePenalty, FiringArc Arc, bool ArcChoiceRequired, List<FiringArc> ArcChoices);
 
     /// <summary>
-    /// Computes all valid (weapon, target) pairs for the current actor during Gunnery.
+    /// Computes all valid, unfired, available (weapon, target) pairs for the current actor during Gunnery.
     /// </summary>
     public List<TargetOption> GetValidTargets()
     {
@@ -429,16 +562,33 @@ public sealed class CombatEngine
         if (ship is null || _state.Phase != CombatPhase.Gunnery) return [];
 
         int bonus = CombatResolver.ComputeGunnerBonus(ship);
+        if (bonus == int.MinValue) return [];
         var options = new List<TargetOption>();
+        var arcChoices = new Dictionary<string, List<FiringArc>>();
+        foreach (var target in _state.ActiveShips().Where(target => target.TeamId != ship.TeamId))
+        {
+            double angle = ship.AngleFromFacing(target.Position);
+            if (IsSharedArcBoundary(angle))
+                arcChoices[target.InstanceId] = ship.Weapons.Select((weapon, index) => (Weapon: weapon, Index: index))
+                    .Where(x => !_firedWeapons.Contains((ship.InstanceId, x.Index)) && ship.HasWeaponUses(x.Index) &&
+                                x.Weapon.Arc != FiringArc.AllArcs && x.Weapon.CanTarget(ship.Position.DistanceTo(target.Position), angle))
+                    .Select(x => x.Weapon.Arc).Distinct().ToList();
+        }
         for (int wi = 0; wi < ship.Weapons.Count; wi++)
         {
+            if (_firedWeapons.Contains((ship.InstanceId, wi))) continue;
+            if (!ship.HasWeaponUses(wi)) continue;
             var weapon = ship.Weapons[wi];
+            if (weapon.Type == WeaponType.Tracking && weapon.ProjectileSpeed <= 0) continue;
             foreach (var target in _state.ActiveShips())
             {
                 if (target.TeamId == ship.TeamId) continue; // no friendly fire in v1
                 int range = ship.Position.DistanceTo(target.Position);
                 double angle = ship.AngleFromFacing(target.Position);
                 if (!weapon.CanTarget(range, angle)) continue;
+                var choices = arcChoices.GetValueOrDefault(target.InstanceId) ?? [];
+                if (choices.Count > 0 && _targetArcChoices.TryGetValue((ship.InstanceId, target.InstanceId), out var committedArc) && weapon.Arc != FiringArc.AllArcs && weapon.Arc != committedArc)
+                    continue;
 
                 int defenseValue = weapon.Type switch
                 {
@@ -446,9 +596,10 @@ public sealed class CombatEngine
                     _ => target.CurrentAC
                 };
                 int rangePenalty = weapon.RangePenalty(range);
-                int effectiveBonus = bonus + rangePenalty;
+                int effectiveBonus = bonus == int.MinValue ? bonus : bonus + rangePenalty;
                 int hitChance = CombatResolver.HitChancePercent(effectiveBonus, defenseValue);
-                options.Add(new TargetOption(weapon.Name, target.InstanceId, range, hitChance, wi, rangePenalty));
+                bool choiceRequired = choices.Count > 1 && !_targetArcChoices.ContainsKey((ship.InstanceId, target.InstanceId));
+                options.Add(new TargetOption(weapon.Name, target.InstanceId, range, hitChance, wi, rangePenalty, weapon.Arc, choiceRequired, choices));
             }
         }
         return options;
@@ -457,6 +608,70 @@ public sealed class CombatEngine
     // ────────────────────────────────────────────────
     //  Internal helpers
     // ────────────────────────────────────────────────
+
+    private string ShipLogName(ShipInstance ship)
+    {
+        var sameName = _state.Ships.Where(s => s.Name == ship.Name).ToList();
+        string numberedName = sameName.Count > 1
+            ? $"{ship.Name} #{sameName.FindIndex(s => s.InstanceId == ship.InstanceId) + 1}"
+            : ship.Name;
+        return $"{numberedName} (Team {ship.TeamId + 1})";
+    }
+
+    private string ProjectileLogName(TrackingProjectile projectile)
+        => $"{projectile.Name} (Team {projectile.TeamId + 1})";
+
+    private static bool IsSharedArcBoundary(double angle)
+        => Math.Abs(Math.Abs(angle) - 30) <= 0.01 || Math.Abs(Math.Abs(angle) - 150) <= 0.01;
+
+    private static string ProjectileDisplayName(string weaponName)
+        => weaponName.EndsWith(" Launcher", StringComparison.OrdinalIgnoreCase)
+            ? weaponName[..^" Launcher".Length]
+            : weaponName;
+
+    private void ResolveProjectile(TrackingProjectile projectile, int roll, int checkBonus, int defense)
+    {
+        var target = _state.GetShip(projectile.TargetShipId);
+        if (target is null)
+        {
+            _state.Projectiles.Remove(projectile);
+            return;
+        }
+        int total = roll + checkBonus;
+        if (roll == 1 || (roll != 20 && total < defense))
+        {
+            string ownerName = _state.GetShip(projectile.OwnerShipId) is { } owner ? ShipLogName(owner) : $"Team {projectile.TeamId + 1}";
+            LastEvents.Add(new CombatEvent("Gunnery", projectile.OwnerShipId,
+                $"{ownerName}'s {ProjectileLogName(projectile)} tracking check {CombatResolver.FormatCheck(roll, checkBonus, total)} vs TL {defense} — MISS, projectile lost."));
+            _state.Projectiles.Remove(projectile);
+            return;
+        }
+
+        Hex impactFrom = projectile.Position;
+        var path = GetProjectilePreviewPath(projectile);
+        int moved = 0;
+        foreach (var next in path)
+        {
+            if (projectile.Position != next.Position) moved++;
+            projectile.Facing = next.Facing;
+            projectile.Position = next.Position;
+            if (projectile.Position == target.Position) break;
+        }
+
+        if (projectile.Position == target.Position)
+        {
+            var result = CombatResolver.ResolveProjectileImpact(projectile, target, _dice, roll, checkBonus, defense, impactFrom);
+            string ownerName = _state.GetShip(projectile.OwnerShipId) is { } owner ? ShipLogName(owner) : $"Team {projectile.TeamId + 1}";
+            LastEvents.Add(new CombatEvent("Gunnery", projectile.OwnerShipId,
+                $"{ownerName}'s {ProjectileLogName(projectile)} hits {ShipLogName(target)}: {result.Description}"));
+            _state.Projectiles.Remove(projectile);
+        }
+        else
+        {
+            LastEvents.Add(new CombatEvent("Gunnery", projectile.OwnerShipId,
+                $"{ProjectileLogName(projectile)} advances {moved} hexes toward {ShipLogName(target)}. Gunnery: {CombatResolver.FormatCheck(roll, checkBonus, total)} vs TL {defense}."));
+        }
+    }
 
     /// <summary>Advances to the next actor; if all actors done, advances the phase.</summary>
     private void AdvanceActor()

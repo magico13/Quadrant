@@ -168,7 +168,9 @@ public class ShipCatalogService
                     MinRange = wDef.MinRange,
                     RangeIncrement = wDef.RangeIncrement,
                     Damage = DamageExpression.From(wDef.Damage),
-                    Type = wDef.Type == "Tracking" ? WeaponType.Tracking : WeaponType.DirectFire
+                    Type = wDef.Type == "Tracking" ? WeaponType.Tracking : WeaponType.DirectFire,
+                    ProjectileSpeed = wDef.Speed,
+                    LimitedFireUses = ParseLimitedFireUses(wDef.Special)
                 });
             }
             else
@@ -198,6 +200,14 @@ public class ShipCatalogService
             },
             Weapons = weapons
         };
+    }
+
+    private static int ParseLimitedFireUses(IEnumerable<string> specialProperties)
+    {
+        var tag = specialProperties.FirstOrDefault(s => s.StartsWith("Limited Fire", StringComparison.OrdinalIgnoreCase));
+        if (tag is null) return 0;
+        var digits = new string(tag.Where(char.IsDigit).ToArray());
+        return int.TryParse(digits, out int uses) ? uses : 0;
     }
 
     private static FiringArc ParseArc(string arc) => arc.ToLowerInvariant() switch
@@ -264,6 +274,7 @@ public class WeaponDef
     public string Type { get; set; } = "Direct-Fire";
     public int MinRange { get; set; } = 1;
     public int RangeIncrement { get; set; } = 5;
+    public int Speed { get; set; }
     public required string Damage { get; set; }
     public int Pcu { get; set; }
     public int Cost { get; set; }

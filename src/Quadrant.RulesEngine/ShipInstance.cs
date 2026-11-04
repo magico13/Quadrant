@@ -62,6 +62,30 @@ public sealed class ShipInstance
     public Maneuverability Maneuverability => Definition.Maneuverability;
     public IReadOnlyList<Weapon> Weapons => Definition.Weapons;
 
+    /// <summary>Remaining Limited Fire uses per mounted weapon; null means unlimited.</summary>
+    public List<int?> WeaponUsesRemaining { get; } = [];
+
+    public void InitializeWeaponUses()
+    {
+        if (WeaponUsesRemaining.Count == Weapons.Count) return;
+        WeaponUsesRemaining.Clear();
+        WeaponUsesRemaining.AddRange(Weapons.Select(w => w.LimitedFireUses > 0 ? w.LimitedFireUses : (int?)null));
+    }
+
+    public bool HasWeaponUses(int weaponIndex)
+    {
+        InitializeWeaponUses();
+        return weaponIndex >= 0 && weaponIndex < WeaponUsesRemaining.Count && WeaponUsesRemaining[weaponIndex] != 0;
+    }
+
+    public bool ConsumeWeaponUse(int weaponIndex)
+    {
+        if (!HasWeaponUses(weaponIndex)) return false;
+        if (WeaponUsesRemaining[weaponIndex] is int remaining)
+            WeaponUsesRemaining[weaponIndex] = remaining - 1;
+        return true;
+    }
+
     /// <summary>
     /// Current Armor Class including round modifiers and critical condition penalties.
     /// </summary>

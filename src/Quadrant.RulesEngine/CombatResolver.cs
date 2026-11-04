@@ -20,6 +20,13 @@ public sealed record AttackResult(
         => new(true, damage, shieldDmg, hullDmg, crit, system, condition, description);
 }
 
+public sealed record AttackCheckResult(
+    bool IsHit, int Roll, int Modifier, int CheckTotal, int DefenseValue,
+    string DefenseName, int DamageRolled, string Description);
+
+public sealed record DamageResolution(int ShieldDamage, int HullDamage, bool CriticalScored,
+    ShipSystem? CriticalSystem, SystemCondition? NewCriticalCondition, string Description);
+
 /// <summary>
 /// Resolves attacks and applies damage during the Gunnery phase. This is where
 /// gunnery checks are made, AC/TL compared, shields depleted, hull damaged,
@@ -27,107 +34,95 @@ public sealed record AttackResult(
 /// </summary>
 public static class CombatResolver
 {
+    public static AttackResult ResolveProjectileImpact(TrackingProjectile projectile, ShipInstance target, IDiceRoller dice, int roll, int checkBonus, int defenseValue, Hex impactFrom)
+    {
+        int rawDamage = projectile.Weapon.Damage.Roll(dice);
+        Quadrant quadrant = target.QuadrantOf(impactFrom);
+        var damage = ApplyDamage(target, quadrant, rawDamage, roll, dice);
+        int total = roll + checkBonus;
+        string desc = $"Tracking check {FormatCheck(roll, checkBonus, total)} vs TL {defenseValue} — IMPACT! {rawDamage} dmg ({damage.ShieldDamage} shield, {damage.HullDamage} hull).";
+        if (damage.CriticalScored) desc += $" CRITICAL: {damage.CriticalSystem} → {damage.NewCriticalCondition}!";
+        return AttackResult.Success(total, rawDamage, damage.ShieldDamage, damage.HullDamage,
+            damage.CriticalScored, damage.CriticalSystem, damage.NewCriticalCondition, desc);
+    }
+
+    public static AttackCheckResult RollAttack(ShipInstance attacker, ShipInstance target, Weapon weapon, IDiceRoller dice,
+        int? gunnerBonus = null, int? defense = null, bool rollDamage = true)
+    {
+        int range = attacker.Position.DistanceTo(target.Position);
+        int defenseValue = defense ?? (weapon.Type == WeaponType.Tracking ? target.CurrentTL : target.CurrentAC);
+        string defenseName = weapon.Type == WeaponType.Tracking ? "TL" : "AC";
+        if (!weapon.CanTarget(range, attacker.AngleFromFacing(target.Position)))
+            return new(false, 0, 0, 0, defenseValue, defenseName, 0, "Cannot target: out of range or wrong arc.");
+
+        int bonus = gunnerBonus ?? ComputeGunnerBonus(attacker);
+        if (bonus == int.MinValue)
+            return new(false, 0, 0, 0, defenseValue, defenseName, 0, "Weapons array is wrecked — attack auto-fails.");
+        bonus += weapon.RangePenalty(range);
+        int roll = dice.RollD20();
+        int total = roll + bonus;
+        bool hit = roll == 20 || (roll != 1 && total >= defenseValue);
+        if (!hit)
+        {
+            return new(false, roll, bonus, total, defenseValue, defenseName, 0,
+                $"Gunnery {FormatCheck(roll, bonus, total)} vs {defenseName} {defenseValue} — MISS.");
+        }
+
+        bool shouldRollDamage = rollDamage && weapon.Type != WeaponType.Tracking;
+        int damage = shouldRollDamage ? weapon.Damage.Roll(dice) : 0;
+        string natural = roll == 20 && total < defenseValue ? " (natural 20 hits automatically)" : "";
+        return new(true, roll, bonus, total, defenseValue, defenseName, damage,
+            $"Gunnery {FormatCheck(roll, bonus, total)} vs {defenseName} {defenseValue} — HIT{natural}." + (shouldRollDamage ? $" {damage} damage rolled." : ""));
+    }
+
+    public static DamageResolution ApplyDamage(ShipInstance target, Quadrant quadrant, int rawDamage, int attackRoll, IDiceRoller dice)
+    {
+        int overflow = target.Shields.Reduce(quadrant, rawDamage);
+        int shieldDamage = rawDamage - overflow;
+        int hullDamage = overflow > target.Definition.DamageThreshold ? overflow : 0;
+        target.HullPoints -= hullDamage;
+        target.TotalHullDamageTaken += hullDamage;
+        if (target.TotalHullDamageTaken > 2 * target.Definition.HullPoints) target.IsDestroyed = true;
+        else if (target.HullPoints <= 0) target.IsDisabled = true;
+
+        int ct = target.Definition.CriticalThreshold;
+        bool thresholdCrossed = false;
+        if (ct > 0 && hullDamage > 0)
+        {
+            int prior = Math.Max(0, target.TotalHullDamageTaken - hullDamage - 1) / ct;
+            int current = Math.Max(0, target.TotalHullDamageTaken - 1) / ct;
+            thresholdCrossed = current > prior;
+        }
+        bool critical = hullDamage > 0 && (attackRoll == 20 || thresholdCrossed);
+        ShipSystem? system = null;
+        SystemCondition? condition = null;
+        if (critical)
+        {
+            system = SystemFromPercent(dice.RollPercent(), target);
+            condition = target.Systems.ApplyCritical(system.Value);
+        }
+        string description = $"{rawDamage} dmg ({shieldDamage} shield, {hullDamage} hull)";
+        if (critical) description += $". CRITICAL: {system} → {condition}!";
+        return new DamageResolution(shieldDamage, hullDamage, critical, system, condition, description);
+    }
+
+    public static string FormatCheck(int roll, int modifier, int total)
+        => modifier < 0 ? $"{roll}-{Math.Abs(modifier)}={total}" : $"{roll}+{modifier}={total}";
+
     /// <summary>
     /// Resolves a single weapon attack from attacker to target.
     /// Returns the result and mutates the target's state (shields, hull, systems).
     /// </summary>
-    public static AttackResult ResolveAttack(ShipInstance attacker, ShipInstance target, Weapon weapon, IDiceRoller dice)
+    public static AttackResult ResolveAttack(ShipInstance attacker, ShipInstance target, Weapon weapon, IDiceRoller dice, int? gunnerBonus = null, int? defense = null)
     {
-        int range = attacker.Position.DistanceTo(target.Position);
-        double angle = attacker.AngleFromFacing(target.Position);
-
-        // Check if the weapon can target this ship.
-        if (!weapon.CanTarget(range, angle))
-            return AttackResult.Miss(0, 0, $"Cannot target: out of range or wrong arc.");
-
-        // Determine what we're checking against: AC for direct fire, TL for tracking.
-        int defenseValue = weapon.Type switch
-        {
-            WeaponType.DirectFire => target.CurrentAC,
-            WeaponType.Tracking => target.CurrentTL,
-            _ => target.CurrentAC
-        };
-        string defenseName = weapon.Type == WeaponType.Tracking ? "TL" : "AC";
-
-        // Make the gunnery check.
-        int roll = dice.RollD20();
-        int bonus = ComputeGunnerBonus(attacker);
-        if (bonus == int.MinValue)
-            return AttackResult.Miss(0, 0, "Weapons array is wrecked — attack auto-fails.");
-
-        int checkTotal = roll + bonus;
-
-        if (checkTotal < defenseValue)
-            return AttackResult.Miss(checkTotal, defenseValue,
-                $"Gunnery {roll}+{bonus}={checkTotal} vs {defenseName} {defenseValue} — MISS.");
-
-        // Hit! Roll damage using the shared dice roller.
-        int rawDamage = weapon.Damage.Roll(dice);
-
-        // Determine which quadrant of the target is hit.
-        Quadrant quadrant = target.QuadrantOf(attacker.Position);
-
-        // Apply damage: shields first, then hull.
-        int shieldDamage = 0;
-        int hullDamage = 0;
-
-        int shieldOverflow = target.Shields.Reduce(quadrant, rawDamage);
-        shieldDamage = rawDamage - shieldOverflow;
-
-        // Hull damage with Damage Threshold check.
-        if (shieldOverflow > 0)
-        {
-            if (shieldOverflow <= target.Definition.DamageThreshold)
-            {
-                hullDamage = 0; // absorbed by damage threshold
-            }
-            else
-            {
-                hullDamage = shieldOverflow;
-            }
-        }
-
-        // Apply hull damage.
-        target.HullPoints -= hullDamage;
-        target.TotalHullDamageTaken += hullDamage;
-
-        // Check for destruction (damage > 2× max hull).
-        if (target.TotalHullDamageTaken > 2 * target.Definition.HullPoints)
-            target.IsDestroyed = true;
-        else if (target.HullPoints <= 0)
-            target.IsDisabled = true;
-
-        // Check for critical damage.
-        bool naturalCrit = roll == 20;
-        bool thresholdCrossed = false;
-        int critThreshold = target.Definition.CriticalThreshold;
-        if (critThreshold > 0 && hullDamage > 0)
-        {
-            int prevMultiple = (target.TotalHullDamageTaken - hullDamage) / critThreshold;
-            int newMultiple = target.TotalHullDamageTaken / critThreshold;
-            thresholdCrossed = newMultiple > prevMultiple;
-        }
-
-        // Critical only if damage reached the hull (not just shields).
-        bool criticalScored = (naturalCrit || thresholdCrossed) && hullDamage > 0;
-
-        ShipSystem? critSystem = null;
-        SystemCondition? newCondition = null;
-
-        if (criticalScored)
-        {
-            // Roll d% to determine which system is hit.
-            int percentRoll = dice.RollPercent();
-            var systemHit = SystemFromPercent(percentRoll, target);
-            critSystem = systemHit;
-            newCondition = target.Systems.ApplyCritical(systemHit);
-        }
-
-        string desc = criticalScored
-            ? $"Gunnery {roll}+{bonus}={checkTotal} vs {defenseName} {defenseValue} — HIT! {rawDamage} dmg ({shieldDamage} shield, {hullDamage} hull). CRITICAL: {critSystem} → {newCondition}!"
-            : $"Gunnery {roll}+{bonus}={checkTotal} vs {defenseName} {defenseValue} — HIT! {rawDamage} dmg ({shieldDamage} shield, {hullDamage} hull).";
-
-        return AttackResult.Success(checkTotal, rawDamage, shieldDamage, hullDamage, criticalScored, critSystem, newCondition, desc);
+        if (weapon.Type == WeaponType.Tracking)
+            return AttackResult.Miss(0, target.CurrentTL, "Tracking weapons must be resolved as projectiles by the combat engine.");
+        var check = RollAttack(attacker, target, weapon, dice, gunnerBonus, defense);
+        if (!check.IsHit) return AttackResult.Miss(check.CheckTotal, check.DefenseValue, check.Description);
+        var damage = ApplyDamage(target, target.QuadrantOf(attacker.Position), check.DamageRolled, check.Roll, dice);
+        return AttackResult.Success(check.CheckTotal, check.DamageRolled, damage.ShieldDamage, damage.HullDamage,
+            damage.CriticalScored, damage.CriticalSystem, damage.NewCriticalCondition,
+            $"{check.Description} Effects: {damage.Description}.");
     }
 
     /// <summary>
@@ -152,17 +147,15 @@ public static class CombatResolver
     }
 
     /// <summary>
-    /// Computes the probability (0-100, rounded to nearest integer) that a natural
-    /// d20 roll plus the gunner bonus meets or exceeds the target's defense value.
-    /// A wrecked weapons array (bonus == int.MinValue) yields 0%.
+    /// Computes the probability that an attack hits. Natural 20s hit automatically,
+    /// natural 1s always miss, and a wrecked weapons array cannot attack.
     /// </summary>
     public static int HitChancePercent(int bonus, int defenseValue)
     {
         if (bonus == int.MinValue) return 0;
-        int need = defenseValue - bonus; // smallest natural roll that hits
-        if (need <= 1) return 100;
-        if (need > 20) return 0;
-        return (int)Math.Round((21.0 - need) / 20.0 * 100);
+        int need = defenseValue - bonus;
+        int successfulNaturalRolls = need > 20 ? 1 : Math.Max(1, 21 - Math.Max(2, need));
+        return successfulNaturalRolls * 5;
     }
 
     /// <summary>

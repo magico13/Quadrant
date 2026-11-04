@@ -16,6 +16,8 @@ let roomCode = null;
 let state = null;          // last fetched game state
 let selectedShots = new Map(); // gunnery: weaponIndex → targetShipId (one target per weapon instance)
 let activeWeapon = null;   // currently selected weapon in gunnery targeting
+let gunneryFeedback = null;
+let selectedTargetArcs = new Map();
 let detailsShipId = null;  // ship currently shown in the details panel
 let pendingMove = null;    // helm: { option, actorId } — move previewed, awaiting confirmation
 let refreshGunnery = null; // module-scope handle to the current gunnery refresh fn
@@ -57,6 +59,7 @@ async function launchGame(selections) {
     const res = await api('/start', { selections });
     roomCode = res.roomCode;
     selectedShots.clear();
+    selectedTargetArcs.clear();
     activeWeapon = null;
     detailsShipId = null;
     hideShipDetails();
@@ -190,6 +193,7 @@ function render() {
         hull: s.hull, maxHull: s.maxHull, shields: s.shields, maxShield: s.maxShield,
     }));
     grid.setShips(ships);
+    grid.setProjectiles(state.projectiles || []);
 
     renderRoster();
 
@@ -225,7 +229,17 @@ const rosterEl = document.getElementById('ship-roster');
 function renderRoster() {
     if (!state || !state.ships) { rosterEl.innerHTML = ''; return; }
     const isCombat = ['Engineering', 'Helm', 'Gunnery'].includes(state.phase);
-    rosterEl.innerHTML = state.ships.map(s => {
+    const entries = [
+        ...state.ships.map(s => ({ ...s, entryType: 'ship' })),
+        ...(state.projectiles || []).map(p => ({ ...p, entryType: 'projectile' }))
+    ];
+    rosterEl.innerHTML = entries.map(s => {
+        if (s.entryType === 'projectile') {
+            return `<div class="roster-entry roster-projectile" style="--team-color:${teamColor(s.teamId)}" data-projectile="${s.id}">
+                <span class="roster-dot"></span>
+                <span class="roster-name">${s.name} <small>(Team ${s.teamId + 1} · in flight)</small></span>
+            </div>`;
+        }
         const active = s.id === state.currentActorId ? ' active' : '';
         const selected = s.id === detailsShipId ? ' selected' : '';
         const hp = isCombat ? ` <span class="roster-hp">${s.hull}/${s.maxHull}</span>` : '';
@@ -239,6 +253,8 @@ function renderRoster() {
         el.addEventListener('click', () => {
             const ship = state.ships.find(s => s.id === el.dataset.ship);
             if (ship) { detailsShipId = ship.id; showShipDetails(ship); grid.centerOn(ship.q, ship.r); }
+            const projectile = (state.projectiles || []).find(p => p.id === el.dataset.projectile);
+            if (projectile) grid.centerOn(projectile.q, projectile.r);
         });
     });
 }
@@ -337,6 +353,10 @@ function setPendingMove(m) {
         : null);
     grid.setPath(pendingMove ? m.path : null);
     renderHelm();
+    if (detailsShipId && pinnedWeapon?.shipId === actor?.id) {
+        const ship = state.ships.find(s => s.id === actor.id);
+        if (ship) showWeaponRange(ship, pinnedWeapon.weaponIndex);
+    }
 }
 
 async function confirmMove() {
@@ -443,9 +463,22 @@ function renderGunnery() {
     grid.setPath(null);
     grid.setGhost(null);
 
-    // Reset selection when the actor changes.
-    selectedShots.clear();
-    activeWeapon = null;
+    // Preserve the current weapon selection between individual shots, but reset
+    // assignments when the acting ship changes.
+    const actorChanged = renderGunnery.actorId !== actor.id;
+    renderGunnery.actorId = actor.id;
+    if (actorChanged) {
+        selectedShots.clear();
+        selectedTargetArcs.clear();
+        activeWeapon = null;
+    }
+    if (renderGunnery.round !== state.round) {
+        selectedShots.clear();
+        selectedTargetArcs.clear();
+        activeWeapon = null;
+        gunneryFeedback = null;
+        renderGunnery.round = state.round;
+    }
 
     const options = state.options?.items || [];
 
@@ -456,37 +489,63 @@ function renderGunnery() {
         weapons.get(o.weaponIndex).push(o);
     }
 
-    // Auto-target: pre-select the closest valid enemy for each weapon.
+    // Auto-target each unfired weapon to its closest valid enemy.
     for (const [widx, opts] of weapons) {
         if (!opts.length) continue;
-        const closest = opts.reduce((best, o) => o.range < best.range ? o : best);
-        selectedShots.set(widx, closest.targetShipId);
+        const currentArc = selectedTargetArcs.get(opts[0].targetShipId);
+        const eligible = currentArc ? opts.filter(o => !o.arcChoiceRequired || o.arc === currentArc) : opts;
+        const closest = eligible.reduce((best, o) => o.range < best.range ? o : best);
+        if (!selectedShots.has(widx) || !opts.some(o => o.targetShipId === selectedShots.get(widx)))
+            selectedShots.set(widx, closest.targetShipId);
     }
 
-    const chips = [...weapons.entries()].map(([widx]) => {
+    const fired = new Set(state.firedWeaponIndices || []);
+    const usableIndices = [...weapons.keys()].filter(i => !fired.has(i));
+    if (activeWeapon === null || fired.has(activeWeapon) || !weapons.has(activeWeapon))
+        activeWeapon = usableIndices[0] ?? null;
+
+    const chipIndices = new Set([...weapons.keys(), ...fired, ...(actor.weapons || []).map((w, i) => w.limitedFireUses > 0 && w.usesRemaining === 0 ? i : null).filter(i => i !== null)]);
+    const chips = [...chipIndices].sort((a, b) => a - b).map(widx => {
         const w = actor.weapons?.[widx];
         if (!w) return '';
         const arcLabel = w.arc && w.arc !== 'AllArcs' ? ` (${w.arc})` : '';
         const dmg = ` · ${w.damage}`;
-        return `<button class="weapon-chip" data-weapon="${widx}">${w.name}${arcLabel}${dmg}</button>`;
+        const ammo = w.limitedFireUses > 0 ? ` · ${w.usesRemaining}/${w.limitedFireUses}` : '';
+        const exhausted = w.limitedFireUses > 0 && w.usesRemaining === 0;
+        const isFired = fired.has(widx);
+        return `<button class="weapon-chip${isFired ? ' fired' : ''}" data-weapon="${widx}" ${(exhausted || isFired) ? `disabled title="${isFired ? 'Already fired this round' : 'Out of ammunition'}"` : ''}>${w.name}${arcLabel}${dmg}${ammo}${isFired ? ' · FIRED' : ''}</button>`;
     }).join('');
 
     actionPanel.innerHTML = `
         <div class="actor-name" style="color:${teamColor(actor.teamId)}">${actor.name}</div>
-        <div class="hint">Each weapon auto-targets its closest enemy in range — click an enemy to retarget, or pick a weapon above to see its range.</div>
+        <div class="hint">Choose a weapon and target, then fire it. Hits are resolved in order; damage waits until all ships finish Gunnery.</div>
+        <div id="arc-choice" class="target-info"></div>
         <div class="weapon-chips">${chips || '<span class="hint">No weapons can fire.</span>'}</div>
         <div id="target-info" class="target-info"></div>
+        ${gunneryFeedback ? `<div class="hint gunnery-feedback">${gunneryFeedback}</div>` : ''}
         <button class="btn btn-primary" id="btn-fire" disabled>Fire</button>
-        <button class="btn btn-ghost" id="btn-skip-fire">Skip Firing</button>`;
+        <button class="btn btn-ghost" id="btn-end-fire">End Gunnery Turn</button>`;
 
     const fireBtn = document.getElementById('btn-fire');
     const targetInfo = document.getElementById('target-info');
+    const arcChoiceEl = document.getElementById('arc-choice');
 
     function refresh() {
         // Highlight the targets reachable by the active weapon.
         if (activeWeapon !== null) {
             const opts = weapons.get(activeWeapon) || [];
             grid.setTargets(opts.map(o => [o.targetShipId, o.hitChancePercent]));
+            const activeArcOption = opts.find(o => o.arcChoiceRequired);
+            if (activeArcOption) {
+                const selected = selectedTargetArcs.get(activeArcOption.targetShipId);
+                arcChoiceEl.innerHTML = `<span class="hint">This target is on an arc boundary. Choose one firing arc for all attacks against it this round.</span><div class="weapon-chips">${activeArcOption.arcChoices.map(arc => `<button class="weapon-chip arc-choice${selected === arc ? ' active' : ''}" data-arc="${arc}" data-target="${activeArcOption.targetShipId}">${arc}</button>`).join('')}</div>`;
+                arcChoiceEl.querySelectorAll('[data-arc]').forEach(button => button.addEventListener('click', () => {
+                    selectedTargetArcs.set(button.dataset.target, button.dataset.arc);
+                    refresh();
+                }));
+            } else {
+                arcChoiceEl.innerHTML = '';
+            }
             // Show this specific weapon's range band as a visual aid (not clickable).
             const w = actor.weapons?.[activeWeapon];
             if (w) {
@@ -514,16 +573,20 @@ function renderGunnery() {
                 const t = state.ships.find(s => s.id === tid);
                 const opt = (weapons.get(widx) || []).find(o => o.targetShipId === tid);
                 const rangeStr = opt ? ` [${opt.range} hex${opt.range !== 1 ? 'es' : ''}${opt.rangePenalty ? `, ${opt.rangePenalty}` : ''}]` : '';
-                return `<span class="shot-item">${label} → ${t?.name ?? '?'}${rangeStr}</span>`;
+                const status = fired.has(widx) ? ' · fired' : '';
+                return `<span class="shot-item">${label} → ${t?.name ?? '?'}${rangeStr}${status}</span>`;
             }).join('')}</div>`;
         }
 
-        fireBtn.disabled = assigned.length === 0;
+        const targetId = activeWeapon === null ? null : selectedShots.get(activeWeapon);
+        const activeOption = activeWeapon === null ? null : (weapons.get(activeWeapon) || []).find(o => o.targetShipId === targetId);
+        const missingArcChoice = !!activeOption?.arcChoiceRequired && !selectedTargetArcs.has(targetId);
+        fireBtn.disabled = activeWeapon === null || !targetId || fired.has(activeWeapon) || missingArcChoice;
     }
 
     refreshGunnery = refresh; // expose for the ship-click dispatcher
 
-    actionPanel.querySelectorAll('.weapon-chip').forEach(chip => {
+    actionPanel.querySelectorAll('.weapon-chip:not(:disabled)').forEach(chip => {
         chip.addEventListener('click', () => {
             const idx = parseInt(chip.dataset.weapon, 10);
             activeWeapon = (activeWeapon === idx) ? null : idx;
@@ -536,13 +599,23 @@ function renderGunnery() {
     refresh();
 
     document.getElementById('btn-fire').addEventListener('click', async () => {
-        const shots = [...selectedShots.entries()].map(([weaponIndex, targetShipId]) => ({ weaponIndex, targetShipId }));
-        await api(`/${roomCode}/fire`, { shots });
+        if (activeWeapon === null) return;
+        const targetShipId = selectedShots.get(activeWeapon);
+        if (!targetShipId) return;
+        const option = (weapons.get(activeWeapon) || []).find(o => o.targetShipId === targetShipId);
+        const arc = option?.arcChoiceRequired ? selectedTargetArcs.get(targetShipId) : undefined;
+        if (option?.arcChoiceRequired && !arc) return;
+        const response = await api(`/${roomCode}/fire`, { weaponIndex: activeWeapon, targetShipId, arc });
+        const target = state.ships.find(s => s.id === targetShipId);
+        const weapon = actor.weapons?.[activeWeapon];
+        gunneryFeedback = response.result
+            ? `${actor.name} (Team ${actor.teamId + 1}) fires ${weapon?.name ?? 'weapon'} at ${target?.name ?? 'target'} (Team ${(target?.teamId ?? 0) + 1}): ${response.result}`
+            : 'Weapon could not fire.';
         await fetchState();
     });
 
-    document.getElementById('btn-skip-fire').addEventListener('click', async () => {
-        await api(`/${roomCode}/skip-fire`);
+    document.getElementById('btn-end-fire').addEventListener('click', async () => {
+        await api(`/${roomCode}/end-fire`);
         await fetchState();
     });
 }
@@ -574,7 +647,16 @@ function showWeaponRange(ship, weaponIndex) {
     if (!w) return;
     const inc = w.rangeIncrement ?? 5;
     const maxVis = inc * 3; // show up to 3 increments
-    grid.setRangeHexesOnly(rangeBandHexes(ship, w.minRange ?? 1, maxVis, w.arc, inc));
+    let perspective = ship;
+    if (state?.phase === 'Helm' && pendingMove?.actorId === ship.id) {
+        perspective = {
+            ...ship,
+            q: pendingMove.option.position.q,
+            r: pendingMove.option.position.r,
+            facing: pendingMove.option.finalFacing
+        };
+    }
+    grid.setRangeHexesOnly(rangeBandHexes(perspective, w.minRange ?? 1, maxVis, w.arc, inc));
 }
 
 function clearWeaponRange() {
@@ -595,7 +677,7 @@ function showShipDetails(ship) {
     const weaponsHtml = (ship.weapons || []).map((w, i) => `
         <div class="detail-weapon dw-hoverable" data-weapon-index="${i}">
             <span class="dw-name">${w.name}</span>
-            <span class="dw-meta">${w.arc} · inc ${w.rangeIncrement ?? 5} · ${w.damage}${w.type ? ` · ${w.type}` : ''}</span>
+            <span class="dw-meta">${w.arc} · inc ${w.rangeIncrement ?? 5} · ${w.damage}${w.type ? ` · ${w.type}` : ''}${w.limitedFireUses > 0 ? ` · ${w.usesRemaining}/${w.limitedFireUses} shots` : ''}</span>
         </div>`).join('');
 
     const systemsHtml = (ship.damagedSystems || []).length
@@ -703,6 +785,10 @@ grid.onShipClick = (ship) => {
             // Specific weapon selected — use it if it can reach this target.
             const opt = options.find(o => o.weaponIndex === activeWeapon && o.targetShipId === ship.id);
             if (opt) {
+                if (opt.arcChoiceRequired && !selectedTargetArcs.has(ship.id)) {
+                    const choices = opt.arcChoices || [];
+                    if (choices.length === 1) selectedTargetArcs.set(ship.id, choices[0]);
+                }
                 selectedShots.set(activeWeapon, ship.id);
                 refreshGunnery?.();
             }
@@ -710,7 +796,16 @@ grid.onShipClick = (ship) => {
             // No weapon selected — assign the closest-range weapon that can hit this target.
             const candidates = options.filter(o => o.targetShipId === ship.id);
             if (candidates.length) {
-                const best = candidates.reduce((a, b) => a.range < b.range ? a : b);
+                const boundary = candidates.find(o => o.arcChoiceRequired);
+                if (boundary && !selectedTargetArcs.has(ship.id) && boundary.arcChoices.length > 1) {
+                    activeWeapon = boundary.weaponIndex;
+                    refreshGunnery?.();
+                    return;
+                }
+                const legal = selectedTargetArcs.has(ship.id)
+                    ? candidates.filter(o => !o.arcChoiceRequired || o.arc === selectedTargetArcs.get(ship.id))
+                    : candidates;
+                const best = legal.reduce((a, b) => a.range < b.range ? a : b);
                 selectedShots.set(best.weaponIndex, ship.id);
                 activeWeapon = best.weaponIndex;
                 actionPanel.querySelectorAll('.weapon-chip').forEach(c =>

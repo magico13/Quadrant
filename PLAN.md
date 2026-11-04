@@ -16,7 +16,8 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 ## Current State
 - A playable hotseat combat loop is in place, with server-side rules, room codes, and a browser client.
 - The working tree contains uncommitted catalog and fleet setup work: ship and weapon JSON files, startup loading, a catalog API, and a UI for selecting ships for each team. This work has not yet been committed.
-- Six ship definitions and a larger weapon catalog are present. Weapon special tags are catalog data; their effects are not yet implemented.
+- Six ship definitions and a larger weapon catalog are present. Limited Fire and tracking projectiles are implemented; other weapon special tags remain catalog data.
+- Tracking projectiles now use catalog speed, acquire against TL, home each gunnery phase, and impact using normal shields/hull/critical rules.
 - Ship editing and SQLite persistence, per-player access and hidden information, and real-time synchronization remain future work. The architecture and v1 scope below describe targets, not all current implementation.
 
 ## TODO — Completed
@@ -33,6 +34,13 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 
 ## TODO — Next Up (Bigger Features)
 
+### Hotseat rules completion (before multiplayer)
+- [ ] Audit existing movement, attacks, critical damage and phase timing against the local `wiki_pages/Chapter 9_ Starships - Rules - Archives of Nethys_ Starfinder RPG Database.html` and document deliberate deviations.
+- [ ] Model crew, roles, role changes, action limits, skills, Resolve, minor actions and crew casualties.
+- [ ] Implement crew actions, stunts, system damage effects and engineering repairs.
+- [ ] Implement remaining tracking weapon and special property rules using the relevant linked rules.
+- [ ] Playtest the completed hotseat combat loop; ship editing and SQLite remain separate content work.
+
 ### Multiplayer
 - [ ] **Player login / team assignment.** Keep team identity separate from player identity; initially assign control of teams, with shared teams and control of multiple teams possible later. Room codes remain the way to join.
 - [ ] **Hidden information.** Opponent's hull, shields, weapons, and system damage not visible until revealed by combat or scanning. Server must filter state per-player.
@@ -43,21 +51,21 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 - Until then, cooperative players can share a team. Ships act independently, and team identity should remain separate from player identity so multiplayer can eventually support shared teams.
 
 ### Sensor / Scanning
-- [ ] **Fog of war.** Ships start unknown to the opponent — no position, no stats visible on the grid until scanned or they fire.
-- [ ] **Scan action (Science Officer).** Spend an Engineering-phase action to reveal a ship's position and basic stats within sensor range.
-- [ ] **Passive detection.** Firing reveals your position to the target. Movement may be detectable at close range.
+- Ships remain visible on the grid; there is no fog of war or hidden ship position.
+- [ ] **Scan action (Science Officer).** Take a Helm-phase action to reveal information about a visible ship according to the sensor rules.
 
 ### Crew Actions & Stunts
-- [ ] **Captain actions.** Inspire (+2 morale), Take Command (reroll one check), etc.
-- [ ] **Science Officer actions.** Scan, Target Lock (–2 TL on next attack), Analyze (reveal weapon details).
+- [ ] **Captain actions.** Implement the applicable any-phase actions, including taunt. When adding them, include available captain actions in the Gunnery auto-end decision so a captain can act after the ship fires.
+- [ ] **Science Officer actions.** Scan, balance shields, target a system, and lock on, following the relevant rules.
 - [ ] **Engineer actions.** Repair hull/shields, Reroute Power (boost a system at cost of another).
 - [ ] **Stunts.** Back Off, Barrel Roll, Evade, Flip and Burn, Flyby, Slide — each with movement/AC/TL effects.
-- [ ] **Push actions.** "Push" a check to auto-succeed but take –2 next round (blocked if system is Malfunctioning).
+- [ ] **Push actions.** Implement the chapter's push-action rules, including restrictions when the necessary system is malfunctioning or wrecked.
 
 ### Weapon Special Tags
 - [ ] **Wide arc at penalty.** Some weapons can fire outside their normal arc at a –4 penalty (e.g., turret-mounted weapons firing aft).
 - [ ] **Mining Laser "Burrowing."** If the Mining Laser hits, it burrows into the hull — next round it deals damage directly to hull ignoring shields.
-- [ ] **Tracking weapon acquisition.** First gunnery check to acquire target; subsequent rounds auto-hit at TL (no re-roll needed unless target evades).
+- [x] **Tracking projectiles.** Initial attack uses TL and range penalty; each later gunnery phase checks TL again and moves by listed speed. Misses destroy the projectile; impacts deal normal damage.
+- [x] **Limited Fire.** Each mounted weapon with the property tracks its uses for the encounter; firing spends one use, and empty launchers cannot fire.
 - [ ] **Point-blank / close-range bonuses.** Some weapons get bonuses at very short range.
 
 ### Visual Polish (Flavor)
@@ -123,7 +131,6 @@ Game Server (ASP.NET Core + SignalR)
 ### Out (Deferred)
 - Stunts (Back Off, Barrel Roll, Evade, Flip and Burn, Flyby, Slide) — Turn In Place is done
 - Captain / Science Officer actions
-- Tracking weapon projectiles (missiles)
 - Crew damage
 - Obstacles (asteroids, space stations)
 - Full crew ability system
@@ -134,6 +141,7 @@ Game Server (ASP.NET Core + SignalR)
 Ship controller is a field: `HumanController` or `AiController`. Orchestrator routes: human → wait for input, AI → call strategy. LLM piping possible by serializing state to JSON and prompting. Not v1.
 
 ## Rules Reference (Starfinder CRB pg. 316–326)
+- Primary reference: [Archives of Nethys — Chapter 9: Starships](https://www.aonsrd.com/Rules.aspx?ID=179). Consult the relevant sections when designing, implementing, and testing starship rules; record intentional game-specific departures from those rules.
 - **Roles:** Captain, Engineer, Gunner, Pilot, Science Officer
 - **Phases:** Engineering → Helm → Gunnery (repeat until one side destroyed/flees)
 - **Movement:** Speed in hexes, turns = 60° each, gated by maneuverability distance-between-turns

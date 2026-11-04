@@ -7,5 +7,6 @@
   "damage": "2d8",
   "pcu": 5,
   "cost": 7,
-  "special": []
+  "special": [],
+  "speed": 16
 }

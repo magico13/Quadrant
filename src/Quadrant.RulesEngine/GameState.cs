@@ -44,6 +44,9 @@ public sealed class GameState
     /// <summary>All ships in the battle, keyed by instance ID.</summary>
     public List<ShipInstance> Ships { get; } = [];
 
+    /// <summary>Tracking projectiles in flight; these never take ship turns or count for victory.</summary>
+    public List<TrackingProjectile> Projectiles { get; } = [];
+
     /// <summary>
     /// The order in which ships act during Helm and Gunnery this round.
     /// Determined by Piloting check results (lowest first). Recomputed each round.

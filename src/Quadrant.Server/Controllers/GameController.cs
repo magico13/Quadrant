@@ -37,7 +37,7 @@ public class GameController : ControllerBase
             ac = s.BaseAC,
             tl = s.BaseTL,
             shields = new { forward = s.Shields.Forward, starboard = s.Shields.Starboard, aft = s.Shields.Aft, port = s.Shields.Port },
-            weapons = s.Weapons.Select(w => new { name = w.Name, arc = w.Arc, damage = w.Damage.ToString() })
+            weapons = s.Weapons.Select(w => new { name = w.Name, arc = w.Arc, damage = w.Damage.ToString(), type = w.Type, speed = w.ProjectileSpeed, limitedFireUses = w.LimitedFireUses })
         }));
     }
 
@@ -70,6 +70,7 @@ public class GameController : ControllerBase
 
         var state = session.State;
         var engine = session.Engine;
+        foreach (var ship in state.Ships) ship.InitializeWeaponUses();
 
         // Phase-specific helper data for the client UI.
         object? options = null;
@@ -77,6 +78,18 @@ public class GameController : ControllerBase
             options = new { type = "moves", items = engine.GetValidMoves().Select(m => new { position = new { q = m.Position.Q, r = m.Position.R }, finalFacing = (int)m.FinalFacing, path = m.Path.Select(h => new { q = h.Position.Q, r = h.Position.R }).ToList() }) };
         else if (state.Phase == CombatPhase.Gunnery && state.CurrentActor is not null)
             options = new { type = "targets", items = engine.GetValidTargets() };
+
+        var projectileViews = state.Projectiles.Select(p =>
+        {
+            var path = state.Phase == CombatPhase.Helm ? engine.GetProjectilePreviewPath(p) : [];
+            return new
+            {
+                id = p.Id, name = p.Name, teamId = p.TeamId, q = p.Position.Q, r = p.Position.R,
+                facing = (int)p.Facing, targetShipId = p.TargetShipId,
+                previewFacing = (int)(path.LastOrDefault()?.Facing ?? p.Facing),
+                previewPath = path.Select(step => new { q = step.Position.Q, r = step.Position.R }).ToList()
+            };
+        }).ToList();
 
         var result = Ok(new
         {
@@ -86,6 +99,7 @@ public class GameController : ControllerBase
             actionOrder = state.ActionOrder,
             currentActorIndex = state.CurrentActorIndex,
             currentActorId = state.CurrentActor?.InstanceId,
+            firedWeaponIndices = engine.FiredWeaponIndices,
             winner = state.Winner,
             isComplete = state.IsComplete,
             ships = state.Ships.Select(s => new
@@ -106,9 +120,10 @@ public class GameController : ControllerBase
                 isDisabled = s.IsDisabled,
                 shields = new { forward = s.Shields.Forward, starboard = s.Shields.Starboard, aft = s.Shields.Aft, port = s.Shields.Port },
                 maxShield = s.Definition.Shields.Forward, // client uses this for arc opacity scaling
-                weapons = s.Weapons.Select(w => new { name = w.Name, arc = w.Arc, minRange = w.MinRange, rangeIncrement = w.RangeIncrement, maxFireRange = w.MaxFireRange, damage = w.Damage.ToString(), type = w.Type }),
+                weapons = s.Weapons.Select((w, i) => new { name = w.Name, arc = w.Arc, minRange = w.MinRange, rangeIncrement = w.RangeIncrement, maxFireRange = w.MaxFireRange, damage = w.Damage.ToString(), type = w.Type, projectileSpeed = w.ProjectileSpeed, limitedFireUses = w.LimitedFireUses, usesRemaining = s.WeaponUsesRemaining[i] }),
                 damagedSystems = s.DamagedSystems
             }),
+            projectiles = projectileViews,
             options,
             // Return and clear pending events so the client only sees new ones.
             log = engine.LastEvents.Select(e => new { phase = e.Phase, shipId = e.ShipId, message = e.Message }).ToList()
@@ -159,6 +174,7 @@ public class GameController : ControllerBase
         if (session is null) return NotFound(new { error = "Game not found." });
 
         var result = session.Engine.TryMoveTo(new Hex(req.Q, req.R), (Facing)req.Facing);
+        if (result.IsValid) AdvanceUnavailableGunneryTurns(session.Engine);
         return result.IsValid
             ? Ok(new { ok = true })
             : BadRequest(new { error = result.Error });
@@ -172,6 +188,7 @@ public class GameController : ControllerBase
         if (session is null) return NotFound(new { error = "Game not found." });
 
         session.Engine.SkipMove();
+        AdvanceUnavailableGunneryTurns(session.Engine);
         return Ok(new { ok = true });
     }
 
@@ -183,21 +200,34 @@ public class GameController : ControllerBase
         if (session is null) return NotFound(new { error = "Game not found." });
 
         var result = session.Engine.TryTurnInPlace((Facing)req.Facing);
+        if (result.IsValid) AdvanceUnavailableGunneryTurns(session.Engine);
         return result.IsValid
             ? Ok(new { ok = true })
             : BadRequest(new { error = result.Error });
     }
 
-    /// <summary>Gunnery: fire the current actor's weapons at chosen targets.</summary>
+    /// <summary>Gunnery: resolve one weapon's attack roll now; damage waits until the phase ends.</summary>
     [HttpPost("{roomCode}/fire")]
-    public IActionResult Fire(string roomCode, [FromBody] FireRequest req)
+    public IActionResult Fire(string roomCode, [FromBody] FireShotRequest req)
     {
         var session = _sessions.Get(roomCode);
         if (session is null) return NotFound(new { error = "Game not found." });
 
-        var actions = req.Shots.Select(s => new FireAction(s.WeaponIndex, s.TargetShipId)).ToList();
-        var results = session.Engine.ApplyGunneryTurn(actions);
-        return Ok(new { ok = true, results = results.Select(r => r.Description).ToList() });
+        var result = session.Engine.ApplyFire(new FireAction(req.WeaponIndex, req.TargetShipId), req.Arc is null ? null : Enum.Parse<FiringArc>(req.Arc, true));
+        if (result is not null)
+            AdvanceUnavailableGunneryTurns(session.Engine);
+        return Ok(new { ok = result is not null, result = result?.Description });
+    }
+
+    /// <summary>Gunnery: finish the current ship's firing choices.</summary>
+    [HttpPost("{roomCode}/end-fire")]
+    public IActionResult EndFire(string roomCode)
+    {
+        var session = _sessions.Get(roomCode);
+        if (session is null) return NotFound(new { error = "Game not found." });
+        session.Engine.EndGunneryTurn();
+        AdvanceUnavailableGunneryTurns(session.Engine);
+        return Ok(new { ok = true });
     }
 
     /// <summary>Gunnery: skip the current actor's firing.</summary>
@@ -208,7 +238,13 @@ public class GameController : ControllerBase
         if (session is null) return NotFound(new { error = "Game not found." });
 
         session.Engine.SkipFire();
+        AdvanceUnavailableGunneryTurns(session.Engine);
         return Ok(new { ok = true });
+    }
+
+    private static void AdvanceUnavailableGunneryTurns(CombatEngine engine)
+    {
+        while (engine.AutoEndGunneryTurnIfNoActions()) { }
     }
 }
 
@@ -216,5 +252,4 @@ public sealed record StartGameRequest(List<ShipSelection>? Selections);
 public sealed record EngineeringRequest(string ShipId, int Amount);
 public sealed record MoveRequest(int Q, int R, int Facing);
 public sealed record TurnInPlaceRequest(int Facing);
-public sealed record FireRequest(List<Shot> Shots);
-public sealed record Shot(int WeaponIndex, string TargetShipId);
+public sealed record FireShotRequest(int WeaponIndex, string TargetShipId, string? Arc = null);

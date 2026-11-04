@@ -77,6 +77,7 @@ class HexGrid {
         this.ctx = canvas.getContext('2d');
         this.size = 26;          // hex radius in px (world units, fixed for infinite grid)
         this.ships = [];         // [{id, q, r, facing, teamId, name, hull, maxHull, shields:{...}}]
+        this.projectiles = [];
         this.highlightHexes = new Set();   // movement highlights (blue)
         this.rangeHexes = new Map();      // gunnery range: key -> band (1..3), faded per increment
         this.selectedShipId = null;
@@ -244,6 +245,7 @@ class HexGrid {
     }
 
     setShips(ships) { this.ships = ships; this.draw(); }
+    setProjectiles(projectiles) { this.projectiles = projectiles; this.draw(); }
     setHighlights(hexes) { this.highlightHexes = new Set(hexes.map(h => `${h.q},${h.r}`)); this.rangeHexes.clear(); this.draw(); }
     // Warm-colored hexes for gunnery range (kept separate from movement highlights).
     // Each hex may carry a `band` (1..3); the renderer fades each band.
@@ -329,6 +331,17 @@ class HexGrid {
             const p = this._pixel(ship.q, ship.r);
             this._drawShip(p.x, p.y, ship);
         }
+        for (const projectile of this.projectiles) {
+            const p = this._pixel(projectile.q, projectile.r);
+            this._drawProjectilePath(projectile);
+            this._drawProjectile(p.x, p.y, projectile);
+            if (projectile.previewPath?.length) {
+                const end = projectile.previewPath[projectile.previewPath.length - 1];
+                const ghost = this._pixel(end.q, end.r);
+                this._drawProjectile(ghost.x, ghost.y,
+                    { ...projectile, facing: projectile.previewFacing }, 0.35, false);
+            }
+        }
 
         // Movement path: a dashed line through the hex centers of the previewed route.
         if (this.path && this.path.length > 1) {
@@ -358,6 +371,53 @@ class HexGrid {
             ctx.restore();
         }
 
+        ctx.restore();
+    }
+
+    _drawProjectilePath(projectile) {
+        if (!projectile.previewPath?.length) return;
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.strokeStyle = teamColor(projectile.teamId);
+        ctx.lineWidth = 2 / this.zoom;
+        ctx.globalAlpha = 0.55;
+        ctx.setLineDash([5 / this.zoom, 4 / this.zoom]);
+        ctx.beginPath();
+        const start = this._pixel(projectile.q, projectile.r);
+        ctx.moveTo(start.x, start.y);
+        for (const step of projectile.previewPath) {
+            const p = this._pixel(step.q, step.r);
+            ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    _drawProjectile(x, y, projectile, alpha = 1, label = true) {
+        const ctx = this.ctx;
+        const color = teamColor(projectile.teamId);
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate((projectile.facing * 60 - 30) * Math.PI / 180);
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = color;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5 / this.zoom;
+        ctx.beginPath();
+        ctx.moveTo(0, -this.size * 0.25);
+        ctx.lineTo(this.size * 0.16, this.size * 0.2);
+        ctx.lineTo(0, this.size * 0.1);
+        ctx.lineTo(-this.size * 0.16, this.size * 0.2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+        if (!label) return;
+        ctx.save();
+        ctx.font = `${Math.max(8, this.size * 0.27)}px 'Segoe UI', sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillStyle = color;
+        ctx.fillText(`${projectile.name} - T${projectile.teamId + 1}`, x, y + this.size * 0.45);
         ctx.restore();
     }
 

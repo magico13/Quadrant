@@ -10,10 +10,10 @@ public class HitChanceTests
     [InlineData(12, 0, 45)]   // need=12 → (21-12)/20 = 45%
     [InlineData(12, 3, 60)]   // need=9  → (21-9)/20  = 60%
     [InlineData(12, -3, 30)]  // need=15 → (21-15)/20 = 30%
-    [InlineData(12, 11, 100)] // need=1  → guaranteed hit
-    [InlineData(12, 12, 100)] // need=0  → guaranteed hit
+    [InlineData(12, 11, 95)] // natural 1 always misses
+    [InlineData(12, 12, 95)] // natural 1 always misses
     [InlineData(12, -8, 5)]   // need=20 → (21-20)/20 = 5%
-    [InlineData(12, -9, 0)]   // need=21 → impossible
+    [InlineData(12, -9, 5)]   // natural 20 always hits
     public void HitChancePercent_ComputesExpectedProbability(int defenseValue, int bonus, int expected)
     {
         Assert.Equal(expected, CombatResolver.HitChancePercent(bonus, defenseValue));
@@ -24,6 +24,14 @@ public class HitChanceTests
     {
         // A wrecked weapons array (int.MinValue sentinel) can never hit.
         Assert.Equal(0, CombatResolver.HitChancePercent(int.MinValue, 12));
+    }
+
+    [Theory]
+    [InlineData(100, -10, 5)]
+    [InlineData(1, 10, 95)]
+    public void HitChancePercent_RespectsNaturalTwentyAndNaturalOne(int defenseValue, int bonus, int expected)
+    {
+        Assert.Equal(expected, CombatResolver.HitChancePercent(bonus, defenseValue));
     }
 
     [Fact]

@@ -31,6 +31,12 @@ public sealed record Weapon
     /// <summary>Whether this is a direct-fire or tracking weapon.</summary>
     public WeaponType Type { get; init; } = WeaponType.DirectFire;
 
+    /// <summary>Hexes a tracking projectile moves during each successful gunnery check.</summary>
+    public int ProjectileSpeed { get; init; }
+
+    /// <summary>Maximum shots per encounter for Limited Fire; zero means unlimited.</summary>
+    public int LimitedFireUses { get; init; }
+
     /// <summary>
     /// Whether this weapon can fire at close range (range 1). Most weapons can,
     /// but some (like certain missiles) have a minimum range of 2.
@@ -91,6 +97,6 @@ public enum WeaponType
     /// <summary>Resolved against target AC. Hits immediately.</summary>
     DirectFire,
 
-    /// <summary>Resolved against target TL. Projectile homes each round (deferred).</summary>
+    /// <summary>Resolved against target TL; projectile homes and checks each gunnery phase.</summary>
     Tracking
 }
