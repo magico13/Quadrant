@@ -34,10 +34,10 @@ public static class CombatResolver
     public static AttackResult ResolveAttack(ShipInstance attacker, ShipInstance target, Weapon weapon, IDiceRoller dice)
     {
         int range = attacker.Position.DistanceTo(target.Position);
-        int arcOffset = attacker.ArcOffsetTo(target.Position);
+        double angle = attacker.AngleFromFacing(target.Position);
 
         // Check if the weapon can target this ship.
-        if (!weapon.CanTarget(range, arcOffset))
+        if (!weapon.CanTarget(range, angle))
             return AttackResult.Miss(0, 0, $"Cannot target: out of range or wrong arc.");
 
         // Determine what we're checking against: AC for direct fire, TL for tracking.

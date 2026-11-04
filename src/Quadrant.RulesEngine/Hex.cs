@@ -96,6 +96,21 @@ public readonly record struct Hex(int Q, int R)
     }
 
     /// <summary>
+    /// The angle in degrees from this hex to another, using pointy-top pixel projection.
+    /// Returns a value in [-180, 180]. Returns null if the hexes are the same.
+    /// </summary>
+    public double? AngleTo(Hex other)
+    {
+        int x = other.Q - Q;
+        int z = other.R - R;
+        if (x == 0 && z == 0) return null;
+
+        double px = Math.Sqrt(3) * (x + z / 2.0);
+        double py = 1.5 * z;
+        return Math.Atan2(py, px) * 180.0 / Math.PI;
+    }
+
+    /// <summary>
     /// Moves this hex a number of steps in the given direction.
     /// </summary>
     public Hex Step(int direction, int steps)

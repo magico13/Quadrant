@@ -15,8 +15,15 @@ public sealed record Weapon
     /// <summary>Minimum range in hexes (inclusive).</summary>
     public int MinRange { get; init; } = 1;
 
-    /// <summary>Maximum range in hexes (inclusive).</summary>
-    public int MaxRange { get; init; } = 6;
+    /// <summary>
+    /// Range increment in hexes. The weapon takes a –2 penalty per increment
+    /// (or fraction thereof) beyond the first. Maximum fireable distance is
+    /// 10 × this value.
+    /// </summary>
+    public int RangeIncrement { get; init; } = 6;
+
+    /// <summary>Maximum fireable distance in hexes (10 range increments).</summary>
+    public int MaxFireRange => RangeIncrement * 10;
 
     /// <summary>The damage expression rolled on a hit.</summary>
     public required DamageExpression Damage { get; init; }
@@ -31,29 +38,46 @@ public sealed record Weapon
     public bool CanFireAtCloseRange => MinRange <= 1;
 
     /// <summary>
-    /// Checks whether this weapon can target a ship at the given range and arc offset.
+    /// Checks whether this weapon can target a ship at the given range and angle.
+    /// Angle is in degrees from the ship's facing: 0 = ahead, positive = starboard,
+    /// negative = port. Boundaries are inclusive so hexes on an arc edge belong to both arcs.
     /// </summary>
-    public bool CanTarget(int range, int arcOffset)
+    public bool CanTarget(int range, double angleFromFacing)
     {
-        if (range < MinRange || range > MaxRange) return false;
-        return ArcCovers(arcOffset);
+        if (range < MinRange || range > MaxFireRange) return false;
+        return ArcCovers(angleFromFacing);
     }
 
     /// <summary>
-    /// Determines whether this weapon's arc covers the given angular offset
-    /// from the ship's facing. Offset 0 = directly forward, ±1 = adjacent arc,
-    /// ±2 = next, ±3 = directly aft.
+    /// Computes the cumulative –2 range penalty for firing at the given distance.
+    /// The first range increment is free; each additional increment (or fraction
+    /// thereof) adds –2. Example: with a 6-hex increment, range 7–12 → –2, 13–18 → –4.
     /// </summary>
-    private bool ArcCovers(int offset)
+    public int RangePenalty(int range)
     {
-        int o = ((offset % 6) + 6) % 6; // normalize to 0-5
+        if (range <= RangeIncrement) return 0;
+        // Number of increments beyond the first (ceiling division)
+        int extraIncrements = (int)Math.Ceiling((double)(range - RangeIncrement) / RangeIncrement);
+        return -2 * extraIncrements;
+    }
+
+    /// <summary>
+    /// Determines whether this weapon's arc covers the given angle from facing.
+    /// Forward/Aft are 60° cones; Port/Starboard are 120° arcs.
+    /// Boundaries are inclusive: a hex at exactly ±30° is in both adjacent arcs.
+    /// A small epsilon guards against floating-point drift in atan2 results.
+    /// </summary>
+    private const double ArcEps = 0.01; // degrees
+
+    private bool ArcCovers(double angle)
+    {
         return Arc switch
         {
             FiringArc.AllArcs => true,
-            FiringArc.Forward => o is 0 or 1 or 5,       // forward + adjacent (3 hexes wide)
-            FiringArc.Port => o is 4 or 5,               // port side (2 hexes)
-            FiringArc.Starboard => o is 1 or 2,          // starboard side (2 hexes)
-            FiringArc.Aft => o is 2 or 3 or 4,           // aft + adjacent (3 hexes wide)
+            FiringArc.Forward => angle >= -30 - ArcEps && angle <= 30 + ArcEps,
+            FiringArc.Starboard => angle >= 30 - ArcEps && angle <= 150 + ArcEps,
+            FiringArc.Aft => angle >= 150 - ArcEps || angle <= -150 + ArcEps,
+            FiringArc.Port => angle >= -150 - ArcEps && angle <= -30 + ArcEps,
             _ => false
         };
     }

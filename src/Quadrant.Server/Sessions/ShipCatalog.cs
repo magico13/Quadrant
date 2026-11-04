@@ -24,7 +24,7 @@ public static class ShipCatalog
         Shields = new QuadrantShields { Forward = 3, Starboard = 2, Aft = 3, Port = 2 },
         Weapons = new List<Weapon>
         {
-            new() { Name = "Mining Laser", Arc = FiringArc.Forward, MinRange = 1, MaxRange = 4, Damage = DamageExpression.From("2d6"), Type = WeaponType.DirectFire }
+            new() { Name = "Mining Laser", Arc = FiringArc.Forward, MinRange = 1, RangeIncrement = 5, Damage = DamageExpression.From("2d6"), Type = WeaponType.DirectFire }
         }
     };
 
@@ -44,10 +44,10 @@ public static class ShipCatalog
         Shields = new QuadrantShields { Forward = 10, Starboard = 10, Aft = 10, Port = 10 },
         Weapons = new List<Weapon>
         {
-            new() { Name = "Light Laser Cannon", Arc = FiringArc.Forward, MinRange = 1, MaxRange = 6, Damage = DamageExpression.From("2d4"), Type = WeaponType.DirectFire },
-            new() { Name = "Light Laser Cannon", Arc = FiringArc.Port, MinRange = 1, MaxRange = 6, Damage = DamageExpression.From("2d4"), Type = WeaponType.DirectFire },
-            new() { Name = "Light Laser Cannon", Arc = FiringArc.Starboard, MinRange = 1, MaxRange = 6, Damage = DamageExpression.From("2d4"), Type = WeaponType.DirectFire },
-            new() { Name = "Coilgun", Arc = FiringArc.AllArcs, MinRange = 1, MaxRange = 8, Damage = DamageExpression.From("4d4"), Type = WeaponType.DirectFire }
+            new() { Name = "Light Laser Cannon", Arc = FiringArc.Forward, MinRange = 1, RangeIncrement = 5, Damage = DamageExpression.From("2d4"), Type = WeaponType.DirectFire },
+            new() { Name = "Light Laser Cannon", Arc = FiringArc.Port, MinRange = 1, RangeIncrement = 5, Damage = DamageExpression.From("2d4"), Type = WeaponType.DirectFire },
+            new() { Name = "Light Laser Cannon", Arc = FiringArc.Starboard, MinRange = 1, RangeIncrement = 5, Damage = DamageExpression.From("2d4"), Type = WeaponType.DirectFire },
+            new() { Name = "Coilgun", Arc = FiringArc.AllArcs, MinRange = 1, RangeIncrement = 20, Damage = DamageExpression.From("4d4"), Type = WeaponType.DirectFire }
         }
     };
 
@@ -67,7 +67,7 @@ public static class ShipCatalog
         Shields = new QuadrantShields { Forward = 5, Starboard = 5, Aft = 5, Port = 5 },
         Weapons = new List<Weapon>
         {
-            new() { Name = "Heavy Laser Cannon", Arc = FiringArc.Forward, MinRange = 1, MaxRange = 12, Damage = DamageExpression.From("4d8"), Type = WeaponType.DirectFire }
+            new() { Name = "Heavy Laser Cannon", Arc = FiringArc.Forward, MinRange = 1, RangeIncrement = 10, Damage = DamageExpression.From("4d8"), Type = WeaponType.DirectFire }
         }
     };
 

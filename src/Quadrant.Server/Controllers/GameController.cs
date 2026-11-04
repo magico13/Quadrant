@@ -71,7 +71,7 @@ public class GameController : ControllerBase
                 isDisabled = s.IsDisabled,
                 shields = new { forward = s.Shields.Forward, starboard = s.Shields.Starboard, aft = s.Shields.Aft, port = s.Shields.Port },
                 maxShield = s.Definition.Shields.Forward, // client uses this for arc opacity scaling
-                weapons = s.Weapons.Select(w => new { name = w.Name, arc = w.Arc, minRange = w.MinRange, maxRange = w.MaxRange, damage = w.Damage.ToString(), type = w.Type }),
+                weapons = s.Weapons.Select(w => new { name = w.Name, arc = w.Arc, minRange = w.MinRange, rangeIncrement = w.RangeIncrement, maxFireRange = w.MaxFireRange, damage = w.Damage.ToString(), type = w.Type }),
                 damagedSystems = s.DamagedSystems
             }),
             options,
@@ -160,7 +160,7 @@ public class GameController : ControllerBase
         var session = _sessions.Get(roomCode);
         if (session is null) return NotFound(new { error = "Game not found." });
 
-        var actions = req.Shots.Select(s => new FireAction(s.WeaponName, s.TargetShipId)).ToList();
+        var actions = req.Shots.Select(s => new FireAction(s.WeaponIndex, s.TargetShipId)).ToList();
         var results = session.Engine.ApplyGunneryTurn(actions);
         return Ok(new { ok = true, results = results.Select(r => r.Description).ToList() });
     }
@@ -181,4 +181,4 @@ public sealed record EngineeringRequest(string ShipId, int Amount);
 public sealed record MoveRequest(int Q, int R, int Facing);
 public sealed record TurnInPlaceRequest(int Facing);
 public sealed record FireRequest(List<Shot> Shots);
-public sealed record Shot(string WeaponName, string TargetShipId);
+public sealed record Shot(int WeaponIndex, string TargetShipId);

@@ -59,3 +59,10 @@ nunit-*.xml
 
 # reference docs
 wiki_pages/
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/

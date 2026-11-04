@@ -92,6 +92,48 @@ html, body {
     margin-bottom: 12px;
 }
 
+/* Ship roster */
+#ship-roster {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 16px;
+}
+
+.roster-entry {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.15s, border-color 0.15s;
+    border: 1px solid transparent;
+}
+
+.roster-entry:hover { background: rgba(255, 255, 255, 0.05); }
+.roster-entry.selected { border-color: var(--accent); background: rgba(79, 195, 247, 0.1); }
+.roster-entry.active .roster-name::after { content: ' ◂'; font-size: 10px; opacity: 0.7; }
+
+.roster-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.roster-entry.p1 .roster-dot { background: var(--p1); }
+.roster-entry.p2 .roster-dot { background: var(--p2); }
+.roster-entry.p1 .roster-name { color: var(--p1); }
+.roster-entry.p2 .roster-name { color: var(--p2); }
+
+.roster-hp {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
 #log {
     flex: 1;
     overflow-y: auto;
@@ -244,6 +286,29 @@ html, body {
     font-size: 14px;
 }
 
+/* Turn-in-place picker: six buttons arranged as a hex ring around the center. */
+.facing-ring {
+    position: relative;
+    width: 260px;
+    height: 230px;
+}
+.facing-ring .facing-btn {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    width: 74px;
+    padding: 8px 0;
+}
+/* The direction the ship already faces — picking it is a no-op (no stunt penalty). */
+.facing-btn.hold {
+    background: var(--panel, #1b2333);
+    border-color: var(--text-dim, #5a6b8c);
+    color: var(--text-dim, #9fb0cc);
+}
+.facing-caption {
+    font-size: 13px;
+    color: var(--text-dim);
+}
+
 /* ── Ship details panel (floating) ── */
 #ship-details {
     position: fixed;
@@ -320,6 +385,10 @@ html, body {
 }
 .dw-name { font-size: 13px; font-weight: 600; }
 .dw-meta { font-size: 11px; color: var(--text-dim); }
+/* Weapon rows are hoverable/clickable to preview their range on the grid. */
+.detail-weapon.dw-hoverable { cursor: pointer; transition: background 0.15s, border-color 0.15s; border: 1px solid transparent; }
+.detail-weapon.dw-hoverable:hover { background: rgba(79, 195, 247, 0.1); border-color: var(--panel-border); }
+.detail-weapon.dw-pinned { background: rgba(79, 195, 247, 0.18); border-color: var(--accent); }
 
 .detail-list { list-style: none; font-size: 12px; color: #ffab91; }
 .detail-list li { padding: 2px 0; }

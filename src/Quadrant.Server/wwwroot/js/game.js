@@ -14,7 +14,7 @@ const tooltipEl = document.getElementById('ship-tooltip');
 
 let roomCode = null;
 let state = null;          // last fetched game state
-let selectedShots = new Map(); // gunnery: weaponName → targetShipId (one target per weapon)
+let selectedShots = new Map(); // gunnery: weaponIndex → targetShipId (one target per weapon instance)
 let activeWeapon = null;   // currently selected weapon in gunnery targeting
 let detailsShipId = null;  // ship currently shown in the details panel
 let pendingMove = null;    // helm: { option, actorId } — move previewed, awaiting confirmation
@@ -80,6 +80,8 @@ function render() {
     }));
     grid.setShips(ships);
 
+    renderRoster();
+
     // Refresh the details panel if a ship is still selected.
     if (detailsShipId) {
         const s = state.ships.find(x => x.id === detailsShipId);
@@ -104,6 +106,31 @@ function render() {
 
 function currentActor() {
     return state.ships.find(s => s.id === state.currentActorId);
+}
+
+// ── Ship Roster ──
+const rosterEl = document.getElementById('ship-roster');
+
+function renderRoster() {
+    if (!state || !state.ships) { rosterEl.innerHTML = ''; return; }
+    const isCombat = ['Engineering', 'Helm', 'Gunnery'].includes(state.phase);
+    rosterEl.innerHTML = state.ships.map(s => {
+        const teamCls = s.teamId === 0 ? 'p1' : 'p2';
+        const active = s.id === state.currentActorId ? ' active' : '';
+        const selected = s.id === detailsShipId ? ' selected' : '';
+        const hp = isCombat ? ` <span class="roster-hp">${s.hull}/${s.maxHull}</span>` : '';
+        return `<div class="roster-entry ${teamCls}${active}${selected}" data-ship="${s.id}">
+            <span class="roster-dot"></span>
+            <span class="roster-name">${s.name}</span>${hp}
+        </div>`;
+    }).join('');
+
+    rosterEl.querySelectorAll('.roster-entry').forEach(el => {
+        el.addEventListener('click', () => {
+            const ship = state.ships.find(s => s.id === el.dataset.ship);
+            if (ship) { detailsShipId = ship.id; showShipDetails(ship); grid.centerOn(ship.q, ship.r); }
+        });
+    });
 }
 
 // ── Setup ──
@@ -172,7 +199,9 @@ function renderHelm() {
     actionPanel.innerHTML = `
         <div class="actor-name p${actor.teamId + 1}">${actor.name}</div>
         ${pending
-            ? `<div class="hint">Moving to (${pending.position.q}, ${pending.position.r}), facing ${facingNames[pending.finalFacing]}. Click another hex to change, or confirm.</div>
+            ? `<div class="hint">${pending.isTurnInPlace
+                    ? `Turning in place to face ${facingNames[pending.finalFacing]}.`
+                    : `Moving to (${pending.position.q}, ${pending.position.r}), facing ${facingNames[pending.finalFacing]}.`} Click another hex or your ship to change, or confirm.</div>
                <button class="btn btn-primary" id="btn-confirm-move">Confirm Move</button>
                <button class="btn btn-ghost" id="btn-cancel-move">Cancel</button>`
             : `<div class="hint">Click a highlighted hex to preview a move. Click your own ship to turn in place. If several facings are possible, you'll be asked which.</div>
@@ -204,7 +233,11 @@ async function confirmMove() {
     const m = pendingMove?.option;
     if (!m) return;
     try {
-        await api(`/${roomCode}/move`, { q: m.position.q, r: m.position.r, facing: m.finalFacing });
+        if (m.isTurnInPlace) {
+            await api(`/${roomCode}/turn-in-place`, { facing: m.finalFacing });
+        } else {
+            await api(`/${roomCode}/move`, { q: m.position.q, r: m.position.r, facing: m.finalFacing });
+        }
         pendingMove = null;
         grid.setGhost(null);
         grid.setPath(null);
@@ -212,6 +245,82 @@ async function confirmMove() {
     } catch (err) {
         addLog('error', `Move failed: ${err.message}`);
     }
+}
+
+// Clockwise direction index (0-5) from one hex to another, or -1 if the same.
+// Mirrors Hex.DirectionTo in the rules engine so arc math matches the server.
+function directionTo(from, to) {
+    const x = to.q - from.q;
+    const z = to.r - from.r;
+    const y = -x - z;
+    for (let i = 0; i < 6; i++) {
+        const d = Hex.DIRECTIONS[i];
+        if (x === d.dq && y === -d.dq - d.dr && z === d.dr) return i;
+    }
+    // Not adjacent — nearest direction by angle (pointy-top).
+    const px = Math.sqrt(3) * (x + z / 2);
+    const py = 1.5 * z;
+    const angleDeg = Math.atan2(py, px) * 180 / Math.PI;
+    const dirAngles = [-120, -60, 0, 60, 120, 180];
+    let best = 0, bestDist = Infinity;
+    for (let i = 0; i < 6; i++) {
+        let diff = Math.abs(angleDeg - dirAngles[i]);
+        if (diff > 180) diff = 360 - diff;
+        if (diff < bestDist) { bestDist = diff; best = i; }
+    }
+    return best;
+}
+
+// Angle-based arc coverage check. Mirrors Weapon.ArcCovers on the server.
+// angle is in degrees from facing: 0 = ahead, positive = starboard (clockwise),
+// negative = port (counter-clockwise). Boundaries are inclusive — a hex on the
+// boundary line belongs to both adjacent arcs. EPS guards against floating-point
+// drift so e.g. atan2 returning 29.999… for a true 30° hex still counts as ≥30.
+const ARC_EPS = 0.01; // degrees
+function arcCovers(arc, angle) {
+    switch (arc) {
+        case 'AllArcs': return true;
+        case 'Forward': return angle >= -30 - ARC_EPS && angle <= 30 + ARC_EPS;
+        case 'Starboard': return angle >= 30 - ARC_EPS && angle <= 150 + ARC_EPS;
+        case 'Aft': return angle >= 150 - ARC_EPS || angle <= -150 + ARC_EPS;
+        case 'Port': return angle >= -150 - ARC_EPS && angle <= -30 + ARC_EPS;
+        default: return false;
+    }
+}
+
+// Continuous angle in degrees from a ship's facing to a relative hex offset.
+// Mirrors ShipInstance.AngleFromFacing on the server.
+function angleFromFacing(facing, relQ, relR) {
+    const x = relQ, z = relR;
+    if (x === 0 && z === 0) return 0;
+    const px = Math.sqrt(3) * (x + z / 2);
+    const py = 1.5 * z;
+    const angleDeg = Math.atan2(py, px) * 180 / Math.PI;
+    // Facing direction angles: NW=-120, NE=-60, E=0, SE=60, SW=120, W=180
+    const facingAngles = [-120, -60, 0, 60, 120, 180];
+    let diff = angleDeg - facingAngles[facing];
+    while (diff > 180) diff -= 360;
+    while (diff < -180) diff += 360;
+    return diff;
+}
+
+// Hexes within a weapon's range band [minR, maxR] AND inside its firing arc.
+// Visual only — used to show where the weapon can reach during Gunnery.
+// Each hex is tagged with `band` (1 = first increment, 2 = second, ...) so the
+// renderer can fade each successive increment.
+function rangeBandHexes(ship, minR, maxR, arc, inc) {
+    const out = [];
+    for (let r = -maxR; r <= maxR; r++) {
+        for (let q = -maxR; q <= maxR; q++) {
+            if (q === 0 && r === 0) continue; // the ship's own hex
+            const d = Hex.distance({ q: 0, r: 0 }, { q, r });
+            if (d < minR || d > maxR) continue;
+            const angle = angleFromFacing(ship.facing, q, r);
+            if (!arcCovers(arc, angle)) continue;
+            out.push({ q: ship.q + q, r: ship.r + r, band: Math.ceil(d / (inc || 1)) });
+        }
+    }
+    return out;
 }
 
 // ── Gunnery ──
@@ -230,22 +339,31 @@ function renderGunnery() {
 
     const options = state.options?.items || [];
 
-    // Group valid targets by weapon so we can show one chip per weapon.
-    const weapons = new Map(); // weaponName → [options]
+    // Group valid targets by weapon index so each instance gets its own chip.
+    const weapons = new Map(); // weaponIndex → [options]
     for (const o of options) {
-        if (!weapons.has(o.weaponName)) weapons.set(o.weaponName, []);
-        weapons.get(o.weaponName).push(o);
+        if (!weapons.has(o.weaponIndex)) weapons.set(o.weaponIndex, []);
+        weapons.get(o.weaponIndex).push(o);
     }
 
-    const chips = [...weapons.entries()].map(([wname]) => {
-        const w = actor.weapons?.find(w => w.name === wname);
-        const dmg = w ? ` · ${w.damage}` : '';
-        return `<button class="weapon-chip" data-weapon="${wname}">${wname}${dmg}</button>`;
+    // Auto-target: pre-select the closest valid enemy for each weapon.
+    for (const [widx, opts] of weapons) {
+        if (!opts.length) continue;
+        const closest = opts.reduce((best, o) => o.range < best.range ? o : best);
+        selectedShots.set(widx, closest.targetShipId);
+    }
+
+    const chips = [...weapons.entries()].map(([widx]) => {
+        const w = actor.weapons?.[widx];
+        if (!w) return '';
+        const arcLabel = w.arc && w.arc !== 'AllArcs' ? ` (${w.arc})` : '';
+        const dmg = ` · ${w.damage}`;
+        return `<button class="weapon-chip" data-weapon="${widx}">${w.name}${arcLabel}${dmg}</button>`;
     }).join('');
 
     actionPanel.innerHTML = `
         <div class="actor-name p${actor.teamId + 1}">${actor.name}</div>
-        <div class="hint">Select a weapon, then click an enemy to target it. Each weapon fires once per turn.</div>
+        <div class="hint">Each weapon auto-targets its closest enemy in range — click an enemy to retarget, or pick a weapon above to see its range.</div>
         <div class="weapon-chips">${chips || '<span class="hint">No weapons can fire.</span>'}</div>
         <div id="target-info" class="target-info"></div>
         <button class="btn btn-primary" id="btn-fire" disabled>Fire</button>
@@ -256,23 +374,37 @@ function renderGunnery() {
 
     function refresh() {
         // Highlight the targets reachable by the active weapon.
-        if (activeWeapon) {
+        if (activeWeapon !== null) {
             const opts = weapons.get(activeWeapon) || [];
             grid.setTargets(opts.map(o => [o.targetShipId, o.hitChancePercent]));
+            // Show this specific weapon's range band as a visual aid (not clickable).
+            const w = actor.weapons?.[activeWeapon];
+            if (w) {
+                const inc = w.rangeIncrement ?? 5;
+                const maxVis = inc * 3; // show up to 3 increments
+                const hexes = rangeBandHexes(actor, w.minRange ?? 1, maxVis, w.arc, inc);
+                grid.setRangeHexes(hexes);
+            }
+            const label = w ? `${w.name}${w.arc && w.arc !== 'AllArcs' ? ` (${w.arc})` : ''}` : activeWeapon;
             targetInfo.innerHTML = opts.length
-                ? `<span class="hint">Click a highlighted enemy to set ${activeWeapon}'s target.</span>`
-                : `<span class="hint">${activeWeapon} has no targets in range.</span>`;
+                ? `<span class="hint">Click a highlighted enemy to set ${label}'s target.</span>`
+                : `<span class="hint">${label} has no targets in range.</span>`;
         } else {
             grid.setTargets([]);
+            grid.setHighlights([]);
             targetInfo.innerHTML = '<span class="hint">Select a weapon above.</span>';
         }
 
         // Show current assignments.
         const assigned = [...selectedShots.entries()];
         if (assigned.length) {
-            targetInfo.innerHTML += `<div class="shot-list">${assigned.map(([w, tid]) => {
+            targetInfo.innerHTML += `<div class="shot-list">${assigned.map(([widx, tid]) => {
+                const w = actor.weapons?.[widx];
+                const label = w ? `${w.name}${w.arc && w.arc !== 'AllArcs' ? ` (${w.arc})` : ''}` : widx;
                 const t = state.ships.find(s => s.id === tid);
-                return `<span class="shot-item">${w} → ${t?.name ?? '?'}</span>`;
+                const opt = (weapons.get(widx) || []).find(o => o.targetShipId === tid);
+                const rangeStr = opt ? ` [${opt.range} hex${opt.range !== 1 ? 'es' : ''}${opt.rangePenalty ? `, ${opt.rangePenalty}` : ''}]` : '';
+                return `<span class="shot-item">${label} → ${t?.name ?? '?'}${rangeStr}</span>`;
             }).join('')}</div>`;
         }
 
@@ -283,9 +415,10 @@ function renderGunnery() {
 
     actionPanel.querySelectorAll('.weapon-chip').forEach(chip => {
         chip.addEventListener('click', () => {
-            activeWeapon = (activeWeapon === chip.dataset.weapon) ? null : chip.dataset.weapon;
+            const idx = parseInt(chip.dataset.weapon, 10);
+            activeWeapon = (activeWeapon === idx) ? null : idx;
             actionPanel.querySelectorAll('.weapon-chip').forEach(c =>
-                c.classList.toggle('active', c.dataset.weapon === activeWeapon));
+                c.classList.toggle('active', parseInt(c.dataset.weapon, 10) === activeWeapon));
             refresh();
         });
     });
@@ -293,7 +426,7 @@ function renderGunnery() {
     refresh();
 
     document.getElementById('btn-fire').addEventListener('click', async () => {
-        const shots = [...selectedShots.entries()].map(([weaponName, targetShipId]) => ({ weaponName, targetShipId }));
+        const shots = [...selectedShots.entries()].map(([weaponIndex, targetShipId]) => ({ weaponIndex, targetShipId }));
         await api(`/${roomCode}/fire`, { shots });
         await fetchState();
     });
@@ -320,15 +453,39 @@ function renderComplete() {
 //  Ship details panel (click a ship)
 // ────────────────────────────────────────────────
 
+// Weapon currently pinned in the details panel (click a row to keep its range
+// highlighted after the mouse leaves). { shipId, weaponIndex } or null.
+let pinnedWeapon = null;
+
+// Highlight the hexes a specific weapon can reach from its ship's current
+// position/facing. Uses setRangeHexesOnly so it layers over Helm move previews.
+function showWeaponRange(ship, weaponIndex) {
+    const w = (ship.weapons || [])[weaponIndex];
+    if (!w) return;
+    const inc = w.rangeIncrement ?? 5;
+    const maxVis = inc * 3; // show up to 3 increments
+    grid.setRangeHexesOnly(rangeBandHexes(ship, w.minRange ?? 1, maxVis, w.arc, inc));
+}
+
+function clearWeaponRange() {
+    grid.setRangeHexesOnly([]);
+}
+
 function showShipDetails(ship) {
     const shieldTotal = Object.values(ship.shields || {}).reduce((a, b) => a + b, 0);
     const shieldMax = (ship.maxShield ?? 0) * 4;
     const arcs = ['forward', 'starboard', 'aft', 'port'];
 
-    const weaponsHtml = (ship.weapons || []).map(w => `
-        <div class="detail-weapon">
+    // Reset the pin if it no longer refers to this ship.
+    if (pinnedWeapon && pinnedWeapon.shipId !== ship.id) {
+        pinnedWeapon = null;
+        clearWeaponRange();
+    }
+
+    const weaponsHtml = (ship.weapons || []).map((w, i) => `
+        <div class="detail-weapon dw-hoverable" data-weapon-index="${i}">
             <span class="dw-name">${w.name}</span>
-            <span class="dw-meta">${w.arc} · ${w.minRange}–${w.maxRange} · ${w.damage}${w.type ? ` · ${w.type}` : ''}</span>
+            <span class="dw-meta">${w.arc} · inc ${w.rangeIncrement ?? 5} · ${w.damage}${w.type ? ` · ${w.type}` : ''}</span>
         </div>`).join('');
 
     const systemsHtml = (ship.damagedSystems || []).length
@@ -359,12 +516,48 @@ function showShipDetails(ship) {
     shipDetailsEl.classList.remove('hidden');
     shipDetailsEl.querySelector('.sd-close').addEventListener('click', () => {
         detailsShipId = null;
+        pinnedWeapon = null;
+        clearWeaponRange();
         hideShipDetails();
     });
+
+    // Hover a weapon row to preview its range; click to pin it.
+    const rows = shipDetailsEl.querySelectorAll('.detail-weapon');
+    rows.forEach(row => {
+        const idx = parseInt(row.dataset.weaponIndex, 10);
+        row.addEventListener('mouseenter', () => showWeaponRange(ship, idx));
+        row.addEventListener('mouseleave', () => {
+            if (pinnedWeapon && pinnedWeapon.shipId === ship.id) {
+                showWeaponRange(ship, pinnedWeapon.weaponIndex); // restore pin
+            } else {
+                clearWeaponRange();
+            }
+        });
+        row.addEventListener('click', () => {
+            if (pinnedWeapon && pinnedWeapon.shipId === ship.id && pinnedWeapon.weaponIndex === idx) {
+                pinnedWeapon = null; // toggle off
+                clearWeaponRange();
+                rows.forEach(r => r.classList.remove('dw-pinned'));
+            } else {
+                pinnedWeapon = { shipId: ship.id, weaponIndex: idx };
+                showWeaponRange(ship, idx);
+                rows.forEach(r => r.classList.toggle('dw-pinned', parseInt(r.dataset.weaponIndex, 10) === idx));
+            }
+        });
+    });
+
+    // Restore a pinned range if this ship is already pinned.
+    if (pinnedWeapon && pinnedWeapon.shipId === ship.id) {
+        showWeaponRange(ship, pinnedWeapon.weaponIndex);
+        rows.forEach(r => r.classList.toggle('dw-pinned', parseInt(r.dataset.weaponIndex, 10) === pinnedWeapon.weaponIndex));
+    }
+
+    renderRoster();
 }
 
 function hideShipDetails() {
     shipDetailsEl.classList.add('hidden');
+    renderRoster();
 }
 
 // ────────────────────────────────────────────────
@@ -393,13 +586,27 @@ grid.onShipClick = (ship) => {
         return;
     }
 
-    // During Gunnery with a weapon selected, clicking an enemy targets it.
-    if (state.phase === 'Gunnery' && activeWeapon) {
+    // During Gunnery, clicking an enemy retargets a weapon at it.
+    if (state.phase === 'Gunnery') {
         const options = state.options?.items || [];
-        const opt = options.find(o => o.weaponName === activeWeapon && o.targetShipId === ship.id);
-        if (opt) {
-            selectedShots.set(activeWeapon, ship.id);
-            refreshGunnery?.(); // update chips/target-info without resetting selection
+        if (activeWeapon !== null) {
+            // Specific weapon selected — use it if it can reach this target.
+            const opt = options.find(o => o.weaponIndex === activeWeapon && o.targetShipId === ship.id);
+            if (opt) {
+                selectedShots.set(activeWeapon, ship.id);
+                refreshGunnery?.();
+            }
+        } else {
+            // No weapon selected — assign the closest-range weapon that can hit this target.
+            const candidates = options.filter(o => o.targetShipId === ship.id);
+            if (candidates.length) {
+                const best = candidates.reduce((a, b) => a.range < b.range ? a : b);
+                selectedShots.set(best.weaponIndex, ship.id);
+                activeWeapon = best.weaponIndex;
+                actionPanel.querySelectorAll('.weapon-chip').forEach(c =>
+                    c.classList.toggle('active', parseInt(c.dataset.weapon, 10) === activeWeapon));
+                refreshGunnery?.();
+            }
         }
         return;
     }
@@ -427,25 +634,42 @@ grid.onHexClick = (q, r) => {
             const same = pendingMove && matches[0].finalFacing === pendingMove.option.finalFacing;
             setPendingMove(same ? null : matches[0]);
         } else {
-            showFacingPicker(matches);
+            showMoveFacingPicker(matches);
         }
     }
 };
 
-function showFacingPicker(matches) {
-    const names = ['NW', 'NE', 'E', 'SE', 'SW', 'W'];
+// Shared facing picker: six buttons laid out as a hex ring, each in the direction it names.
+// options: [{ facing, hold? }] — hold dims the button (a no-op choice). onPick(facing) fires on selection.
+const FACING_NAMES = ['NW', 'NE', 'E', 'SE', 'SW', 'W'];
+const FACING_RING_POS = [
+    { left: 25, top: 13 },   // NW
+    { left: 75, top: 13 },   // NE
+    { left: 100, top: 50 },  // E
+    { left: 75, top: 87 },   // SE
+    { left: 25, top: 87 },   // SW
+    { left: 0, top: 50 }     // W
+];
+
+function showFacingPicker(title, options, onPick, caption) {
     const overlay = document.createElement('div');
     overlay.className = 'facing-picker';
     overlay.innerHTML = `
-        <div class="facing-picker-title">Choose facing (preview, then confirm):</div>
-        ${matches.map((m, i) => `<button class="btn btn-primary facing-btn" data-idx="${i}">${names[m.finalFacing]}</button>`).join('')}`;
+        <div class="facing-picker-title">${title}</div>
+        <div class="facing-ring">
+            ${options.map(o => {
+                const hold = o.hold ? ' hold' : '';
+                return `<button class="btn btn-primary facing-btn${hold}" data-f="${o.facing}" style="left:${FACING_RING_POS[o.facing].left}%;top:${FACING_RING_POS[o.facing].top}%">${FACING_NAMES[o.facing]}</button>`;
+            }).join('')}
+        </div>
+        ${caption ? `<div class="facing-caption">${caption}</div>` : ''}`;
     document.body.appendChild(overlay);
 
     overlay.querySelectorAll('.facing-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-            const idx = parseInt(btn.dataset.idx, 10);
+            const facing = parseInt(btn.dataset.f, 10);
             overlay.remove();
-            setPendingMove(matches[idx]);
+            onPick(facing);
         });
     });
 
@@ -455,32 +679,21 @@ function showFacingPicker(matches) {
     });
 }
 
-async function showTurnInPlacePicker(ship) {
-    const names = ['NW', 'NE', 'E', 'SE', 'SW', 'W'];
-    const overlay = document.createElement('div');
-    overlay.className = 'facing-picker';
-    overlay.innerHTML = `
-        <div class="facing-picker-title">Turn In Place (stunt):</div>
-        ${names.map((n, i) => `<button class="btn btn-primary facing-btn" data-f="${i}">${n}</button>`).join('')}`;
-    document.body.appendChild(overlay);
+function showMoveFacingPicker(matches) {
+    showFacingPicker('Choose facing (preview, then confirm):',
+        matches.map(m => ({ facing: m.finalFacing })),
+        facing => setPendingMove(matches.find(m => m.finalFacing === facing)));
+}
 
-    overlay.querySelectorAll('.facing-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const facing = parseInt(btn.dataset.f, 10);
-            overlay.remove();
-            try {
-                await api(`/${roomCode}/turn-in-place`, { facing });
-                await fetchState();
-            } catch (err) {
-                addLog('error', err.message);
-            }
-        });
-    });
-
-    // Click outside to dismiss
-    overlay.addEventListener('click', (e) => {
-        if (e.target === overlay) overlay.remove();
-    });
+function showTurnInPlacePicker(ship) {
+    showFacingPicker('Turn In Place (stunt):',
+        FACING_NAMES.map((_, i) => ({ facing: i, hold: i === ship.facing })),
+        facing => setPendingMove({
+            position: { q: ship.q, r: ship.r },
+            finalFacing: facing,
+            isTurnInPlace: true
+        }),
+        'Dimmed = already facing (no stunt penalty)');
 }
 
 // ────────────────────────────────────────────────
@@ -501,6 +714,18 @@ function addLog(phase, message) {
 //  Boot
 // ────────────────────────────────────────────────
 
-newGame().catch(err => {
-    addLog('error', `Could not start a game: ${err.message}. Is the server running?`);
-});
+(function boot() {
+    const path = window.location.pathname;
+    // Support /{roomCode} URLs to join an existing game directly.
+    const segments = path.split('/').filter(Boolean);
+    if (segments.length === 1 && /^[A-Z0-9]{4,8}$/i.test(segments[0])) {
+        roomCode = segments[0].toUpperCase();
+        fetchState().catch(err => {
+            addLog('error', `Could not load game ${roomCode}: ${err.message}`);
+        });
+    } else {
+        newGame().catch(err => {
+            addLog('error', `Could not start a game: ${err.message}. Is the server running?`);
+        });
+    }
+})();

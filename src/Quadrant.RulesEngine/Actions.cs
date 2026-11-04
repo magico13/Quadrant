@@ -30,10 +30,7 @@ public sealed record MoveAction(IReadOnlyList<TurnSegment> Segments)
 /// <summary>
 /// A player's intent for the Gunnery phase: fire a specific weapon at a target.
 /// </summary>
-public sealed record FireAction(string WeaponName, string TargetShipId)
-{
-    /// <summary>Fire multiple weapons in sequence (one action per weapon in v1).</summary>
-}
+public sealed record FireAction(int WeaponIndex, string TargetShipId);
 
 /// <summary>
 /// A player's intent for the Engineering phase. In v1 this is a simple repair.

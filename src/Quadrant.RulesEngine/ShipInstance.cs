@@ -134,6 +134,27 @@ public sealed class ShipInstance
         return ((dirToTarget - (int)Facing) % 6 + 6) % 6;
     }
 
+    /// <summary>
+    /// The continuous angle in degrees from this ship's facing to the target,
+    /// normalized to [-180, 180]. 0 = directly ahead, positive = clockwise (starboard),
+    /// negative = counter-clockwise (port). Used for inclusive arc boundary checks.
+    /// </summary>
+    public double AngleFromFacing(Hex targetPosition)
+    {
+        double? angleToTarget = Position.AngleTo(targetPosition);
+        if (angleToTarget is null) return 0;
+
+        // Facing direction angles: NW=-120, NE=-60, E=0, SE=60, SW=120, W=180
+        double[] facingAngles = { -120, -60, 0, 60, 120, 180 };
+        double facingAngle = facingAngles[(int)Facing];
+
+        double diff = angleToTarget.Value - facingAngle;
+        // Normalize to [-180, 180]
+        while (diff > 180) diff -= 360;
+        while (diff < -180) diff += 360;
+        return diff;
+    }
+
     /// <summary>Resets per-round transient state at the start of a new round.</summary>
     public void BeginRound()
     {

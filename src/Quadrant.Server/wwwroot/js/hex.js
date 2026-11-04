@@ -71,7 +71,8 @@ class HexGrid {
         this.ctx = canvas.getContext('2d');
         this.size = 26;          // hex radius in px (world units, fixed for infinite grid)
         this.ships = [];         // [{id, q, r, facing, teamId, name, hull, maxHull, shields:{...}}]
-        this.highlightHexes = new Set();
+        this.highlightHexes = new Set();   // movement highlights (blue)
+        this.rangeHexes = new Map();      // gunnery range: key -> band (1..3), faded per increment
         this.selectedShipId = null;
         this.targets = new Map(); // id -> hitChance (percent) for valid gunnery targets
         this.ghost = null;        // {q, r, facing, teamId, name} — translucent preview ship
@@ -179,6 +180,25 @@ class HexGrid {
         this.draw();
     }
 
+    // Smoothly pan so the given hex is centered in the viewport.
+    centerOn(q, r) {
+        const target = this._pixel(q, r);
+        const targetPanX = this._w / 2 - target.x * this.zoom;
+        const targetPanY = this._h / 2 - target.y * this.zoom;
+        const startX = this.panX, startY = this.panY;
+        const dur = 300;
+        const t0 = performance.now();
+        const step = (now) => {
+            const t = Math.min((now - t0) / dur, 1);
+            const ease = 1 - Math.pow(1 - t, 3); // ease-out cubic
+            this.panX = startX + (targetPanX - startX) * ease;
+            this.panY = startY + (targetPanY - startY) * ease;
+            this.draw();
+            if (t < 1) requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+    }
+
     _inGrid(q, r) {
         // Infinite grid: all hexes are valid.
         return true;
@@ -218,7 +238,13 @@ class HexGrid {
     }
 
     setShips(ships) { this.ships = ships; this.draw(); }
-    setHighlights(hexes) { this.highlightHexes = new Set(hexes.map(h => `${h.q},${h.r}`)); this.draw(); }
+    setHighlights(hexes) { this.highlightHexes = new Set(hexes.map(h => `${h.q},${h.r}`)); this.rangeHexes.clear(); this.draw(); }
+    // Warm-colored hexes for gunnery range (kept separate from movement highlights).
+    // Each hex may carry a `band` (1..3); the renderer fades each band.
+    setRangeHexes(hexes) { this.rangeHexes = new Map(hexes.map(h => [`${h.q},${h.r}`, h.band || 1])); this.highlightHexes.clear(); this.draw(); }
+    // Set the warm range overlay without touching movement highlights — used by the
+    // ship-details weapon hover so it can layer over Helm-phase move previews.
+    setRangeHexesOnly(hexes) { this.rangeHexes = new Map(hexes.map(h => [`${h.q},${h.r}`, h.band || 1])); this.draw(); }
     setSelected(id) { this.selectedShipId = id; this.draw(); }
     // Map of shipId -> hitChance percent for valid gunnery targets.
     setTargets(targets) { this.targets = new Map(targets); this.draw(); }
@@ -262,6 +288,7 @@ class HexGrid {
                 const key = `${q},${r}`;
                 const isHover = this._hover && this._hover.q === q && this._hover.r === r;
                 const isHighlight = this.highlightHexes.has(key);
+                const rangeBand = this.rangeHexes.get(key); // undefined or 1..3
 
                 ctx.beginPath();
                 const cs = Hex.corners(p.x, p.y, this.size * 0.94);
@@ -269,9 +296,23 @@ class HexGrid {
                 for (let i = 1; i < 6; i++) ctx.lineTo(cs[i].x, cs[i].y);
                 ctx.closePath();
 
-                ctx.fillStyle = isHighlight ? 'rgba(79,195,247,0.18)' : isHover ? '#1f3350' : '#16202e';
-                ctx.fill();
-                ctx.strokeStyle = isHighlight ? '#4fc3f7' : '#2a3a52';
+                // Movement highlights are blue; gunnery range is warm (orange),
+                // fading with each successive range increment.
+                if (rangeBand !== undefined) {
+                    const fillA = [0.26, 0.15, 0.08][rangeBand - 1] ?? 0.05;
+                    const strokeA = [0.9, 0.55, 0.3][rangeBand - 1] ?? 0.15;
+                    ctx.fillStyle = `rgba(255,138,42,${fillA})`;
+                    ctx.fill();
+                    ctx.strokeStyle = `rgba(255,138,42,${strokeA})`;
+                } else if (isHighlight) {
+                    ctx.fillStyle = 'rgba(79,195,247,0.18)';
+                    ctx.fill();
+                    ctx.strokeStyle = '#4fc3f7';
+                } else {
+                    ctx.fillStyle = isHover ? '#1f3350' : '#16202e';
+                    ctx.fill();
+                    ctx.strokeStyle = '#2a3a52';
+                }
                 ctx.lineWidth = 1 / this.zoom;
                 ctx.stroke();
             }

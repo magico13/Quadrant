@@ -13,13 +13,51 @@ docker compose down             # stop
 
 Server listens on port **5180**. No persistent state yet (ships are static in `ShipCatalog`, sessions in memory) — add a volume for the `.db` file when SQLite persistence lands.
 
-## TODO — Next Up
-- [x] **Movement confirmation step (client).** Done — Helm moves now preview first: clicking a reachable hex (or your own ship) shows a translucent **ghost ship** at the destination and a "Confirm Move / Cancel" panel instead of moving immediately. You can re-target, change facing, or cancel freely; only Confirm POSTs to `/{room}/move`. Implemented in `game.js` (`pendingMove`, `setPendingMove()`, `confirmMove()`) + `hex.js` (`setGhost()`).
-- [x] **Turn In Place stunt.** Done — Clicking your own ship during Helm shows a facing picker for the Turn In Place stunt (CRB pg. 324). The ship stays in place but can face any direction. Clumsy ships take –4 AC/TL, poor take –2 until next round. Engine: `TryTurnInPlace(Facing)` in `CombatEngine.cs`. Server: `POST /{room}/turn-in-place`. Client: `showTurnInPlacePicker()` in `game.js`.
-- [x] **BFS turn rules fix.** Done — Seed `sinceTurn = 0` means you must move `minBetweenTurns` hexes before your first turn (the rule constrains gaps *between* turns, not the first one). Perfect ships can turn at any point including in place (normal movement, no penalty). Consecutive turn cap: perfect = 2, others = 1.
-- [x] **Stale highlights on phase change.** Done — `renderGunnery()` now clears Helm-phase highlights, path, and ghost when entering Gunnery.
-- [ ] **Weapon-arc hex highlighting (client).** When a weapon is selected during Gunnery, highlight all hexes within range AND in the weapon's arc from the current actor's position/facing. Computed client-side from ship position + facing + weapon arc/range data already in state.
-- [ ] **Range-based attack penalty.** Verify whether Starfinder applies a penalty to attacks based on range (longer shots) and whether the engine accounts for it. Check the hit-chance calc in `CombatEngine.GetValidTargets` / gunnery targeting against the rules. (The Rules Reference below already lists "− range penalty" in the Gunnery Check line, so this is likely intended but may not be implemented.)
+## TODO — Completed
+- [x] **Movement confirmation step (client).** Helm moves preview first: ghost ship + Confirm/Cancel panel. `game.js` (`pendingMove`, `setPendingMove()`, `confirmMove()`) + `hex.js` (`setGhost()`).
+- [x] **Turn In Place stunt.** Facing picker on own-ship click during Helm. Clumsy –4, poor –2 AC/TL until next round. `TryTurnInPlace(Facing)` in `CombatEngine.cs`.
+- [x] **BFS turn rules fix.** Seed `sinceTurn = 0`; perfect ships can turn at any point; consecutive turn cap: perfect = 2, others = 1.
+- [x] **Stale highlights on phase change.** `renderGunnery()` clears Helm-phase highlights, path, and ghost.
+- [x] **Weapon-arc hex highlighting (client).** Per-increment range bands with opacity fading (3 bands: bright → medium → faint). Click a weapon chip to show its arc + range from current position/facing. `rangeBandHexes()` in `game.js`, per-band opacity in `hex.js`.
+- [x] **Range-based attack penalty.** –2 per increment beyond the first, up to 10 increments max fire range. Canonical data from aonsrd.com (Short=5, Medium=10, Long=20). `Weapon.RangePenalty()`, applied in `CombatEngine.GetValidTargets()` and displayed as hit-chance badges + `[N hexes, –2]` in shot list.
+- [x] **Auto-targeting.** On Gunnery entry, each weapon auto-selects its closest valid enemy. Click any enemy to retarget (assigns best weapon). Weapon chips for per-weapon control.
+- [x] **Ship roster sidebar.** Team-colored ship list with hull readout, active-actor indicator, click-to-show-details + smooth center-on-click. Works in all phases.
+
+## TODO — Next Up (Bigger Features)
+
+### Multiplayer
+- [ ] **Player login / team assignment.** Each player logs in and controls only their team's ships. The other team's actions are hidden until resolved. Room code still used to join; add a "join as P1/P2" step.
+- [ ] **Hidden information.** Opponent's hull, shields, weapons, and system damage not visible until revealed by combat or scanning. Server must filter state per-player.
+- [ ] **Real-time sync.** Replace REST polling with SignalR (or SSE) so both players see updates instantly without refresh.
+
+### Sensor / Scanning
+- [ ] **Fog of war.** Ships start unknown to the opponent — no position, no stats visible on the grid until scanned or they fire.
+- [ ] **Scan action (Science Officer).** Spend an Engineering-phase action to reveal a ship's position and basic stats within sensor range.
+- [ ] **Passive detection.** Firing reveals your position to the target. Movement may be detectable at close range.
+
+### Crew Actions & Stunts
+- [ ] **Captain actions.** Inspire (+2 morale), Take Command (reroll one check), etc.
+- [ ] **Science Officer actions.** Scan, Target Lock (–2 TL on next attack), Analyze (reveal weapon details).
+- [ ] **Engineer actions.** Repair hull/shields, Reroute Power (boost a system at cost of another).
+- [ ] **Stunts.** Back Off, Barrel Roll, Evade, Flip and Burn, Flyby, Slide — each with movement/AC/TL effects.
+- [ ] **Push actions.** "Push" a check to auto-succeed but take –2 next round (blocked if system is Malfunctioning).
+
+### Weapon Special Tags
+- [ ] **Wide arc at penalty.** Some weapons can fire outside their normal arc at a –4 penalty (e.g., turret-mounted weapons firing aft).
+- [ ] **Mining Laser "Burrowing."** If the Mining Laser hits, it burrows into the hull — next round it deals damage directly to hull ignoring shields.
+- [ ] **Tracking weapon acquisition.** First gunnery check to acquire target; subsequent rounds auto-hit at TL (no re-roll needed unless target evades).
+- [ ] **Point-blank / close-range bonuses.** Some weapons get bonuses at very short range.
+
+### Visual Polish (Flavor)
+- [ ] **Ship movement animation.** Ships glide from start to end hex over ~300ms instead of teleporting.
+- [ ] **Firing animation.** A line/beam from weapon arc to target, with a brief flash on hit. Damage numbers float up.
+- [ ] **Critical damage effects.** Screen shake or red flash when a critical is scored. System icons appear on the ship.
+- [ ] **Phase transition animations.** Brief overlay showing "HELM" / "GUNNERY" / "ENGINEERING" as phases change.
+
+### Ship Data & Content
+- [ ] **More ships.** Add Tier 1 and Tier 3 ships from published sources.
+- [ ] **Ship editor UI.** Form to create/edit custom ships (hull, shields, weapons, etc.) persisted to SQLite.
+- [ ] **Weapon catalog.** Full list of Starfinder starship weapons with all special tags.
 
 ## Concept
 A browser-playable Starfinder starship combat game for friends. Hex-grid tactical ship combat with the three-phase round loop (Engineering → Helm → Gunnery), AC/TL checks, quadrant shields, hull damage, and critical system failures.
@@ -123,9 +161,11 @@ Based on published Starfinder Society / Pact Worlds ships. All Tier 2.
 
 | Ship | Size | Speed | Maneuverability | Hull | CT | AC | TL | Shields (F/S/A/P) | Weapons |
 |------|------|-------|-----------------|------|----|----|----|--------------------|---------|
-| CompEnt AEV | Tiny | 8 | Perfect (0) | 20 | 4 | 15 | 12 | 3/2/3/2 | Mining Laser 2d6 (Fwd, 1-4) |
-| Pegasus | Medium | 10 | Good (1) | 55 | 11 | 12 | 12 | 10/10/10/10 | Light Laser 2d4 ×3 (Fwd/Port/Sb, 1-6), Coilgun 4d4 (Turret, 1-8) |
-| Gorgon | Large | 4 | Average (2) | 150 | 30 | 10 | 10 | 5/5/5/5 | Heavy Laser 4d8 (Fwd, 1-12) |
+| CompEnt AEV | Tiny | 8 | Perfect (0) | 20 | 4 | 15 | 12 | 3/2/3/2 | Mining Laser 2d6 (Fwd, inc 5) |
+| Pegasus | Medium | 10 | Good (1) | 55 | 11 | 12 | 12 | 10/10/10/10 | Light Laser 2d4 ×3 (Fwd/Port/Sb, inc 5), Coilgun 4d4 (AllArcs, inc 20) |
+| Gorgon | Large | 4 | Average (2) | 150 | 30 | 10 | 10 | 5/5/5/5 | Heavy Laser 4d8 (Fwd, inc 10) |
+
+Range increments per aonsrd.com: Short = 5 hexes, Medium = 10 hexes, Long = 20 hexes.
 
 Default hotseat: Team 0 = Pegasus + AEV (East), Team 1 = Gorgon (West).
 No Damage Threshold on any ship (all "—" in published stats).

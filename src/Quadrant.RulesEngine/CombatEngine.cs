@@ -172,6 +172,14 @@ public sealed class CombatEngine
         if (ship is null || _state.Phase != CombatPhase.Helm)
             return MoveValidationResult.Fail("No ship to move.");
 
+        // Turning to the direction already faced is a no-op: no stunt, no penalty.
+        if (facing == ship.Facing)
+        {
+            LastEvents.Add(new CombatEvent("Helm", ship.InstanceId, $"{ship.Name} holds position."));
+            AdvanceActor();
+            return MoveValidationResult.Ok(ship.Position, facing);
+        }
+
         ship.Facing = facing;
         ship.TurnedInPlaceThisRound = true;
         LastEvents.Add(new CombatEvent("Helm", ship.InstanceId, $"{ship.Name} turns in place to face {facing}."));
@@ -192,12 +200,12 @@ public sealed class CombatEngine
         if (ship is null || _state.Phase != CombatPhase.Gunnery)
             return null;
 
-        var weapon = ship.Weapons.FirstOrDefault(w => w.Name == action.WeaponName);
-        if (weapon is null)
+        if (action.WeaponIndex < 0 || action.WeaponIndex >= ship.Weapons.Count)
         {
-            LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId, $"{ship.Name} has no weapon named '{action.WeaponName}'."));
+            LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId, $"{ship.Name} has no weapon at index {action.WeaponIndex}."));
             return null;
         }
+        var weapon = ship.Weapons[action.WeaponIndex];
 
         var target = _state.GetShip(action.TargetShipId);
         if (target is null || target.IsDestroyed)
@@ -410,7 +418,7 @@ public sealed class CombatEngine
     }
 
     /// <summary>A weapon that the current actor can fire at a specific target.</summary>
-    public sealed record TargetOption(string WeaponName, string TargetShipId, int Range, int HitChancePercent);
+    public sealed record TargetOption(string WeaponName, string TargetShipId, int Range, int HitChancePercent, int WeaponIndex, int RangePenalty);
 
     /// <summary>
     /// Computes all valid (weapon, target) pairs for the current actor during Gunnery.
@@ -422,22 +430,25 @@ public sealed class CombatEngine
 
         int bonus = CombatResolver.ComputeGunnerBonus(ship);
         var options = new List<TargetOption>();
-        foreach (var weapon in ship.Weapons)
+        for (int wi = 0; wi < ship.Weapons.Count; wi++)
         {
+            var weapon = ship.Weapons[wi];
             foreach (var target in _state.ActiveShips())
             {
                 if (target.TeamId == ship.TeamId) continue; // no friendly fire in v1
                 int range = ship.Position.DistanceTo(target.Position);
-                int arcOffset = ship.ArcOffsetTo(target.Position);
-                if (!weapon.CanTarget(range, arcOffset)) continue;
+                double angle = ship.AngleFromFacing(target.Position);
+                if (!weapon.CanTarget(range, angle)) continue;
 
                 int defenseValue = weapon.Type switch
                 {
                     WeaponType.Tracking => target.CurrentTL,
                     _ => target.CurrentAC
                 };
-                int hitChance = CombatResolver.HitChancePercent(bonus, defenseValue);
-                options.Add(new TargetOption(weapon.Name, target.InstanceId, range, hitChance));
+                int rangePenalty = weapon.RangePenalty(range);
+                int effectiveBonus = bonus + rangePenalty;
+                int hitChance = CombatResolver.HitChancePercent(effectiveBonus, defenseValue);
+                options.Add(new TargetOption(weapon.Name, target.InstanceId, range, hitChance, wi, rangePenalty));
             }
         }
         return options;
