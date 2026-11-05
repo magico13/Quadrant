@@ -48,6 +48,15 @@ public sealed record ShipDefinition
     /// <summary>Bonus from defensive countermeasures (added to TL).</summary>
     public int Countermeasures { get; init; } = 0;
 
+    /// <summary>The stat block's listed Computers modifier, including installed system bonuses.</summary>
+    public int ComputersModifier { get; init; } = 0;
+
+    /// <summary>Whether this ship has a sensor system installed.</summary>
+    public bool HasSensors { get; init; }
+
+    /// <summary>Range of active sensors in hexes (5 short, 10 medium, 20 long); zero if unspecified.</summary>
+    public int SensorRangeHexes { get; init; } = 0;
+
     /// <summary>Shield points per quadrant. Keyed by quadrant name.</summary>
     public required QuadrantShields Shields { get; init; }
 

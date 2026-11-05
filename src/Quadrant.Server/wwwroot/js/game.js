@@ -345,9 +345,14 @@ function renderEngineering() {
     for (const ship of ships) {
         const select = document.getElementById(`engineering-action-${ship.id}`);
         if (!select) continue;
+        const memoryKey = `quadrant:${roomCode}:engineering:${ship.id}`;
+        const remembered = localStorage.getItem(memoryKey);
+        if (remembered && [...select.options].some(option => option.value === remembered))
+            select.value = remembered;
         const shieldPanel = document.getElementById(`shield-allocation-${ship.id}`);
         const update = () => { shieldPanel.hidden = select.value !== 'Divert|Shields'; };
         select.addEventListener('change', update);
+        select.addEventListener('change', () => localStorage.setItem(memoryKey, select.value));
         update();
         actionPanel.querySelector(`[data-engineering-ship="${ship.id}"]`).addEventListener('click', async () => {
             const [action, target] = select.value.split('|');
@@ -415,6 +420,87 @@ function renderHelm() {
                 : `<div class="hint">Click a highlighted hex to preview a move.${actor.helmAction === 'Pilot' ? ' Click your own ship to turn in place.' : ''}</div>
                    <button class="btn btn-ghost" id="btn-hold">Hold Position</button>
                    ${actor.helmAction === 'Pilot' ? '<div class="detail-section">Stunts</div><button class="btn btn-ghost" data-stunt="Back Off">Back Off</button> <button class="btn btn-ghost" data-stunt="Flip and Burn">Flip and Burn</button>' : ''}`}`;
+
+    const scienceShips = state.ships.filter(ship => !ship.isDestroyed && !ship.isDisabled &&
+        ((ship.crew || []).some(crew => crew.role === 'Science Officer' && !crew.actionUsed) || (ship.targetedSystems || []).length > 0));
+    if (scienceShips.length) {
+        actionPanel.innerHTML += `<div class="detail-section">Science Officer Actions</div>
+            <div class="hint">Science actions use one available Science Officer's action. Target System locks remain until that ship hits the selected enemy.</div>
+            ${scienceShips.map(ship => {
+                const officers = ship.crew.map((crew, i) => ({ ...crew, i })).filter(crew => crew.role === 'Science Officer' && !crew.actionUsed);
+                const pending = ship.targetedSystems || [];
+                const pendingText = pending.length
+                    ? `<div class="hint">Targeted: ${pending.map(lock => `${state.ships.find(target => target.id === lock.targetShipId)?.name || 'Unknown ship'} — ${lock.system}`).join('; ')}</div>` : '';
+                const enemies = state.ships.filter(target => target.teamId !== ship.teamId && !target.isDestroyed);
+                const sensorRange = ship.sensorRangeHexes || 0;
+                const availableEnemies = enemies.filter(target => {
+                    const distance = Hex.distance({ q: ship.q, r: ship.r }, { q: target.q, r: target.r });
+                    return !pending.some(lock => lock.targetShipId === target.id) && (!sensorRange || distance <= sensorRange * 5);
+                });
+                const actionControls = officers.length ? `
+                    <div class="eng-row"><label>Science Officer</label><select id="science-crew-${ship.id}">${officers.map(c => `<option value="${c.i}">Officer ${c.i + 1} (${c.scienceBonus >= 0 ? '+' : ''}${c.scienceBonus})</option>`).join('')}</select></div>
+                    <div class="eng-row"><label>Action</label><select id="science-action-${ship.id}">
+                        <option value="Balance">Balance Shields</option>
+                        ${ship.hasSensors && availableEnemies.length ? '<option value="Target System">Target System (Push)</option>' : ''}
+                    </select></div>
+                    <div id="science-balance-${ship.id}">
+                        <div class="eng-row"><label>Distribution</label><select id="science-balance-mode-${ship.id}"><option value="shift">Move points between quadrants</option><option value="even">Distribute evenly</option></select></div>
+                        <div id="science-shift-${ship.id}">
+                            <div class="eng-row"><label>From</label><select id="science-from-${ship.id}">${['Forward','Starboard','Aft','Port'].map(q => `<option value="${q}">${q} (${ship.shields[q.toLowerCase()]})</option>`).join('')}</select></div>
+                            <div class="eng-row"><label>To</label><select id="science-to-${ship.id}">${['Forward','Starboard','Aft','Port'].map(q => `<option value="${q}">${q}</option>`).join('')}</select></div>
+                            <div class="eng-row"><label>Shield points</label><input type="number" id="science-amount-${ship.id}" min="1" value="1"></div>
+                        </div>
+                        <div class="hint">Each quadrant must retain at least ${Math.ceil((ship.shields.forward + ship.shields.starboard + ship.shields.aft + ship.shields.port) / 10)} SP.</div>
+                    </div>
+                    <div id="science-target-${ship.id}" hidden>
+                        <div class="eng-row"><label>Enemy</label><select id="science-enemy-${ship.id}">${availableEnemies.map(target => {
+                            const distance = Hex.distance({ q: ship.q, r: ship.r }, { q: target.q, r: target.r });
+                            const rangePenalty = sensorRange ? -2 * Math.max(0, Math.ceil(distance / sensorRange) - 1) : 0;
+                            return `<option value="${target.id}">${target.name} — ${distance} hex${distance === 1 ? '' : 'es'}${rangePenalty ? `, sensor check ${rangePenalty}` : ''} (+${target.countermeasures} countermeasures)</option>`;
+                        }).join('')}</select></div>
+                        <div class="eng-row"><label>System</label><select id="science-system-${ship.id}"><option value="PowerCore">Core</option><option value="Engines">Engines</option><option value="LifeSupport">Life Support</option><option value="Sensors">Sensors</option><option value="WeaponsArray">Weapons</option></select></div>
+                        <div class="hint">The listed Computers bonus already includes ship system modifiers. ${sensorRange ? `Active sensor range: ${sensorRange} hexes per increment, maximum ${sensorRange * 5} hexes; checks take –2 per increment beyond the first.` : 'No sensor range is listed for this ship.'}</div>
+                    </div>
+                    <button class="btn btn-ghost" data-science-ship="${ship.id}">Attempt Science Action</button>
+                    <div class="hint" id="science-error-${ship.id}"></div>` : '<div class="hint">No Science Officer action available this round.</div>';
+                return `<div class="science-action-card">
+                    <div class="detail-section" style="color:${teamColor(ship.teamId)}">${ship.name} (Team ${ship.teamId + 1})</div>
+                    ${pendingText}
+                    ${actionControls}
+                </div>`;
+            }).join('')}`;
+
+        for (const ship of scienceShips) {
+            const actionSelect = document.getElementById(`science-action-${ship.id}`);
+            if (!actionSelect) continue;
+            const balancePanel = document.getElementById(`science-balance-${ship.id}`);
+            const targetPanel = document.getElementById(`science-target-${ship.id}`);
+            const modeSelect = document.getElementById(`science-balance-mode-${ship.id}`);
+            const shiftPanel = document.getElementById(`science-shift-${ship.id}`);
+            actionSelect.addEventListener('change', () => {
+                const targetMode = actionSelect.value === 'Target System';
+                balancePanel.hidden = targetMode;
+                targetPanel.hidden = !targetMode;
+            });
+            modeSelect.addEventListener('change', () => { shiftPanel.hidden = modeSelect.value === 'even'; });
+            actionPanel.querySelector(`[data-science-ship="${ship.id}"]`).addEventListener('click', async () => {
+                const action = actionSelect.value;
+                const payload = { shipId: ship.id, crewIndex: Number(document.getElementById(`science-crew-${ship.id}`).value), action,
+                    balanceEvenly: action === 'Balance' && modeSelect.value === 'even' };
+                if (action === 'Balance' && !payload.balanceEvenly) {
+                    payload.fromQuadrant = document.getElementById(`science-from-${ship.id}`).value;
+                    payload.toQuadrant = document.getElementById(`science-to-${ship.id}`).value;
+                    payload.amount = Number(document.getElementById(`science-amount-${ship.id}`).value);
+                }
+                if (action === 'Target System') {
+                    payload.targetShipId = document.getElementById(`science-enemy-${ship.id}`).value;
+                    payload.system = document.getElementById(`science-system-${ship.id}`).value;
+                }
+                try { await api(`/${roomCode}/science`, payload); await fetchState(); }
+                catch (err) { document.getElementById(`science-error-${ship.id}`).textContent = `Could not attempt action: ${err.message}`; }
+            });
+        }
+    }
 
     if (pending) {
         document.getElementById('btn-confirm-move').addEventListener('click', confirmMove);

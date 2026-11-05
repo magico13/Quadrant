@@ -193,6 +193,10 @@ public class ShipCatalogService
             BaseAC = entry.Ac,
             BaseTL = entry.Tl,
             PowerCorePcu = entry.PowerCore?.Pcu ?? 0,
+            Countermeasures = entry.Countermeasures > 0 ? entry.Countermeasures : ParseSystemRank(entry.Systems, "defenses"),
+            ComputersModifier = entry.Modifiers?.Computers ?? 0,
+            HasSensors = (entry.Systems ?? []).Any(s => s.Contains("sensor", StringComparison.OrdinalIgnoreCase)),
+            SensorRangeHexes = ParseSensorRange(entry.Systems),
             Complement = entry.Complement,
             Crew = (entry.Crew ?? []).Select(c => new CrewDefinition(c.Role, c.Skills ?? new Dictionary<string, int>(),
                 c.Ranks ?? Math.Max(1, (int)entry.Tier))).ToList(),
@@ -213,6 +217,24 @@ public class ShipCatalogService
         if (tag is null) return 0;
         var digits = new string(tag.Where(char.IsDigit).ToArray());
         return int.TryParse(digits, out int uses) ? uses : 0;
+    }
+
+    private static int ParseSystemRank(IEnumerable<string>? systems, string system)
+    {
+        var entry = systems?.FirstOrDefault(s => s.Contains(system, StringComparison.OrdinalIgnoreCase));
+        if (entry is null) return 0;
+        var match = System.Text.RegularExpressions.Regex.Match(entry, @"\bmk\s*(\d+)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return match.Success && int.TryParse(match.Groups[1].Value, out int rank) ? rank : 0;
+    }
+
+    private static int ParseSensorRange(IEnumerable<string>? systems)
+    {
+        var sensor = systems?.FirstOrDefault(s => s.Contains("sensor", StringComparison.OrdinalIgnoreCase));
+        if (sensor is null) return 0;
+        if (sensor.Contains("short-range", StringComparison.OrdinalIgnoreCase)) return 5;
+        if (sensor.Contains("medium-range", StringComparison.OrdinalIgnoreCase) || sensor.Contains("mid-range", StringComparison.OrdinalIgnoreCase)) return 10;
+        if (sensor.Contains("long-range", StringComparison.OrdinalIgnoreCase)) return 20;
+        return 0; // Some special sensor systems do not list a hex range.
     }
 
     private static FiringArc ParseArc(string arc) => arc.ToLowerInvariant() switch
@@ -252,11 +274,19 @@ public class ShipJson
     public int Hp { get; set; }
     public int? Dt { get; set; }
     public int Ct { get; set; }
+    public int Countermeasures { get; set; }
+    public ShipSystemsModifiersJson? Modifiers { get; set; }
+    public List<string>? Systems { get; set; }
     public ShipShieldsJson? Shields { get; set; }
     public List<ShipWeaponRef>? Weapons { get; set; }
     public ShipPowerCoreJson? PowerCore { get; set; }
     public int? Complement { get; set; }
     public List<ShipCrewJson>? Crew { get; set; }
+}
+
+public class ShipSystemsModifiersJson
+{
+    public int Computers { get; set; }
 }
 
 public class ShipPowerCoreJson

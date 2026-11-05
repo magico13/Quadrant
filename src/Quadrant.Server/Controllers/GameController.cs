@@ -79,9 +79,10 @@ public class GameController : ControllerBase
         else if (state.Phase == CombatPhase.Gunnery && state.CurrentActor is not null)
             options = new { type = "targets", items = engine.GetValidTargets() };
 
-        var projectileViews = state.Projectiles.Select(p =>
+        var projectileViews = engine.GetProjectilePreviews().Select(preview =>
         {
-            var path = state.Phase == CombatPhase.Helm ? engine.GetProjectilePreviewPath(p) : [];
+            var p = preview.Projectile;
+            var path = preview.Path;
             return new
             {
                 id = p.Id, name = p.Name, teamId = p.TeamId, q = p.Position.Q, r = p.Position.R,
@@ -114,6 +115,11 @@ public class GameController : ControllerBase
                 id = s.InstanceId,
                 name = state.DisplayName(s),
                 tier = s.Definition.Tier,
+                computersModifier = s.Definition.ComputersModifier,
+                hasSensors = s.Definition.HasSensors,
+                sensorRangeHexes = s.Definition.SensorRangeHexes,
+                countermeasures = s.Definition.Countermeasures,
+                targetedSystems = engine.GetTargetedSystems(s.InstanceId).Select(t => new { targetShipId = t.TargetShipId, system = t.System }),
                 size = s.Definition.Size,
                 teamId = s.TeamId,
                 q = s.Position.Q,
@@ -149,7 +155,8 @@ public class GameController : ControllerBase
                         _ => null
                     };
                     return new { primaryRole = c.Role, role, ranks = c.Ranks, skills = c.Skills, actionUsed = s.CrewActionsUsed.Contains(i),
-                        roleBonus = skill is null ? (int?)null : s.CrewBonus(i, skill, role) };
+                        roleBonus = skill is null ? (int?)null : s.CrewBonus(i, skill, role),
+                        scienceBonus = role == "Science Officer" ? engine.GetScienceOfficerCheckBonus(s, i) : (int?)null };
                 }),
                 helmAction = s.Definition.Crew.Count == 0 || s.CrewRoles.Contains("Pilot") ? "Pilot" : s.AvailableMinorCrew() >= 0 ? "Glide" : "None",
                 gunneryAction = s.Definition.Crew.Count == 0 || s.AvailableGunner() >= 0 ? "Gunner" : !s.GunnerActionTaken && s.AvailableMinorCrew() >= 0 ? "Snap Shot" : "None",
@@ -198,6 +205,16 @@ public class GameController : ControllerBase
         var session = _sessions.Get(roomCode);
         if (session is null) return NotFound(new { error = "Game not found." });
         var error = session.Engine.ApplyEngineering(action);
+        return error is null ? Ok(new { ok = true }) : BadRequest(new { error });
+    }
+
+    /// <summary>Helm: attempt a science officer action.</summary>
+    [HttpPost("{roomCode}/science")]
+    public IActionResult Science(string roomCode, [FromBody] ScienceAction action)
+    {
+        var session = _sessions.Get(roomCode);
+        if (session is null) return NotFound(new { error = "Game not found." });
+        var error = session.Engine.ApplyScience(action);
         return error is null ? Ok(new { ok = true }) : BadRequest(new { error });
     }
 

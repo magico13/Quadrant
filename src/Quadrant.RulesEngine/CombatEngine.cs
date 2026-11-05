@@ -8,18 +8,21 @@ public sealed record CombatEvent(string Phase, string ShipId, string Message)
     public static CombatEvent Info(string phase, string shipId, string msg) => new(phase, shipId, msg);
 }
 
-public sealed record PendingHitSnapshot(string AttackerId, string TargetId, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant);
+public sealed record PendingHitSnapshot(string AttackerId, string TargetId, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant, ShipSystem? TargetedSystem = null);
 public sealed record PendingLaunchSnapshot(TrackingProjectile Projectile, AttackCheckResult Check);
 public sealed record FiredWeaponSnapshot(string ShipId, int WeaponIndex);
 public sealed record TargetArcSnapshot(string ShipId, string TargetId, FiringArc Arc);
 public sealed record ShieldAllocation(int Forward, int Starboard, int Aft, int Port);
 public sealed record EngineerAction(string ShipId, int CrewIndex, string Action, string Target, ShieldAllocation? Shields);
+public sealed record ScienceAction(string ShipId, int CrewIndex, string Action, string TargetShipId = "", string System = "", string FromQuadrant = "", string ToQuadrant = "", int Amount = 0, bool BalanceEvenly = false);
+public sealed record TargetedSystemSnapshot(string ShipId, string TargetShipId, ShipSystem System);
 public sealed record CombatEngineSnapshot(
     List<PendingHitSnapshot> PendingHits, List<PendingLaunchSnapshot> PendingLaunches,
     List<FiredWeaponSnapshot> FiredWeapons, List<TargetArcSnapshot> TargetArcs,
     List<CombatEngine.MoveOption>? StuntMoves, string? PendingStunt,
     CombatEngine.MoveOption? CommittedMove, int MoveStep, Hex LastUnoccupied,
-    Facing LastUnoccupiedFacing, string? FreeAttackShipId, List<CombatEvent> Events);
+    Facing LastUnoccupiedFacing, string? FreeAttackShipId, List<CombatEvent> Events,
+    List<TargetedSystemSnapshot>? TargetedSystems = null);
 
 /// <summary>
 /// The authoritative combat engine. Owns the game state and advances it through
@@ -33,10 +36,11 @@ public sealed class CombatEngine
 {
     private readonly GameState _state;
     private readonly IDiceRoller _dice;
-    private readonly List<(ShipInstance Attacker, ShipInstance Target, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant)> _pendingHits = [];
+    private readonly List<(ShipInstance Attacker, ShipInstance Target, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant, ShipSystem? TargetedSystem)> _pendingHits = [];
     private readonly List<(TrackingProjectile Projectile, AttackCheckResult Check)> _pendingLaunches = [];
     private readonly HashSet<(string ShipId, int WeaponIndex)> _firedWeapons = [];
     private readonly Dictionary<(string ShipId, string TargetId), FiringArc> _targetArcChoices = [];
+    private readonly Dictionary<(string ShipId, string TargetId), ShipSystem> _targetedSystems = [];
     private List<MoveOption>? _stuntMoves;
     public string? PendingStunt { get; private set; }
     private MoveOption? _committedMove;
@@ -45,6 +49,10 @@ public sealed class CombatEngine
     private Facing _lastUnoccupiedFacing;
     public string? FreeAttackShipId { get; private set; }
     public bool HasPendingFreeAttack => FreeAttackShipId is not null;
+
+    public IReadOnlyList<TargetedSystemSnapshot> GetTargetedSystems(string shipId)
+        => _targetedSystems.Where(t => t.Key.ShipId == shipId)
+            .Select(t => new TargetedSystemSnapshot(t.Key.ShipId, t.Key.TargetId, t.Value)).ToList();
 
     public IReadOnlyList<int> GetFreeAttackWeapons()
     {
@@ -141,21 +149,23 @@ public sealed class CombatEngine
     public GameState State => _state;
 
     public CombatEngineSnapshot CaptureSnapshot() => new(
-        _pendingHits.Select(h => new PendingHitSnapshot(h.Attacker.InstanceId, h.Target.InstanceId, h.Weapon, h.Check, h.Quadrant)).ToList(),
+        _pendingHits.Select(h => new PendingHitSnapshot(h.Attacker.InstanceId, h.Target.InstanceId, h.Weapon, h.Check, h.Quadrant, h.TargetedSystem)).ToList(),
         _pendingLaunches.Select(l => new PendingLaunchSnapshot(l.Projectile, l.Check)).ToList(),
         _firedWeapons.Select(w => new FiredWeaponSnapshot(w.ShipId, w.WeaponIndex)).ToList(),
         _targetArcChoices.Select(a => new TargetArcSnapshot(a.Key.ShipId, a.Key.TargetId, a.Value)).ToList(),
         _stuntMoves, PendingStunt, _committedMove, _moveStep, _lastUnoccupied, _lastUnoccupiedFacing,
-        FreeAttackShipId, LastEvents.ToList());
+        FreeAttackShipId, LastEvents.ToList(),
+        _targetedSystems.Select(t => new TargetedSystemSnapshot(t.Key.ShipId, t.Key.TargetId, t.Value)).ToList());
 
     public void RestoreSnapshot(CombatEngineSnapshot snapshot)
     {
         foreach (var h in snapshot.PendingHits)
             _pendingHits.Add((_state.GetShip(h.AttackerId) ?? throw new InvalidDataException("Missing attacker in saved game."),
-                _state.GetShip(h.TargetId) ?? throw new InvalidDataException("Missing target in saved game."), h.Weapon, h.Check, h.Quadrant));
+                _state.GetShip(h.TargetId) ?? throw new InvalidDataException("Missing target in saved game."), h.Weapon, h.Check, h.Quadrant, h.TargetedSystem));
         foreach (var l in snapshot.PendingLaunches) _pendingLaunches.Add((l.Projectile, l.Check));
         foreach (var w in snapshot.FiredWeapons) _firedWeapons.Add((w.ShipId, w.WeaponIndex));
         foreach (var a in snapshot.TargetArcs) _targetArcChoices.Add((a.ShipId, a.TargetId), a.Arc);
+        foreach (var target in snapshot.TargetedSystems ?? []) _targetedSystems.Add((target.ShipId, target.TargetShipId), target.System);
         _stuntMoves = snapshot.StuntMoves;
         PendingStunt = snapshot.PendingStunt;
         _committedMove = snapshot.CommittedMove;
@@ -231,11 +241,11 @@ public sealed class CombatEngine
                     ResolveProjectile(projectile, check.Roll, check.Modifier, check.DefenseValue);
                 }
                 _pendingLaunches.Clear();
-                foreach (var (attacker, target, weapon, check, quadrant) in _pendingHits)
+                foreach (var (attacker, target, weapon, check, quadrant, targetedSystem) in _pendingHits)
                 {
                     int rolledDamage = weapon.Damage.Roll(_dice, attacker.DivertWeapons);
                     bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
-                    var damage = CombatResolver.ApplyDamage(target, quadrant, rolledDamage, check.Roll, _dice);
+                    var damage = CombatResolver.ApplyDamage(target, quadrant, rolledDamage, check.Roll, _dice, targetedSystem);
                     LastEvents.Add(new CombatEvent("Gunnery", attacker.InstanceId,
                         $"{ShipLogName(target)} takes damage from {ShipLogName(attacker)}'s {weapon.Name}: {damage.Description}."));
                     LogShipStatusChange(target, wasDisabled, wasDestroyed, "Gunnery");
@@ -529,7 +539,8 @@ public sealed class CombatEngine
             return check with { Description = $"{check.Description} Missile acquired; it moves at the end of Gunnery." };
         }
 
-        _pendingHits.Add((ship, target, weapon, check, target.QuadrantOf(ship.Position)));
+        ShipSystem? targetedSystem = _targetedSystems.Remove((ship.InstanceId, target.InstanceId), out var chosenSystem) ? chosenSystem : null;
+        _pendingHits.Add((ship, target, weapon, check, target.QuadrantOf(ship.Position), targetedSystem));
         return check with { Description = $"{check.Description} Damage effects apply at the end of Gunnery." };
     }
 
@@ -703,6 +714,121 @@ public sealed class CombatEngine
         return null;
     }
 
+    /// <summary>Attempt one science officer action during Helm.</summary>
+    public string? ApplyScience(ScienceAction action)
+    {
+        if (_state.Phase != CombatPhase.Helm) return "Science officer actions are only available during Helm.";
+        var ship = _state.GetShip(action.ShipId);
+        if (ship is null || ship.IsDestroyed || ship.IsDisabled) return "This ship cannot take science officer actions.";
+        ship.InitializeCrewRoles();
+        if (action.CrewIndex < 0 || action.CrewIndex >= ship.CrewRoles.Count ||
+            ship.CrewRoles[action.CrewIndex] != "Science Officer" || ship.CrewActionsUsed.Contains(action.CrewIndex))
+            return "Select a science officer who has not acted this round.";
+        if (action.Action is not ("Balance" or "Target System")) return "Unknown science officer action.";
+
+        var checkSystem = ship.Systems.GetEffective(ShipSystem.Sensors);
+        if (action.Action == "Target System")
+        {
+            if (!ship.Definition.HasSensors) return "Target System requires sensors.";
+            if (checkSystem is SystemCondition.Malfunctioning or SystemCondition.Wrecked)
+                return "Target System is a push action and requires functioning sensors.";
+            var target = _state.GetShip(action.TargetShipId);
+            if (target is null || target.IsDestroyed || target.TeamId == ship.TeamId) return "Select a valid enemy target.";
+            if (!Enum.TryParse<ShipSystem>(action.System, true, out var selectedSystem) || !Enum.IsDefined(selectedSystem))
+                return "Select a system to target.";
+            if (_targetedSystems.ContainsKey((ship.InstanceId, target.InstanceId)))
+                return "A system is already targeted on that enemy; the lock remains until an attack hits.";
+
+            int range = ship.Position.DistanceTo(target.Position);
+            int sensorRange = ship.Definition.SensorRangeHexes;
+            if (sensorRange > 0 && range > sensorRange * 5)
+                return $"Target System is out of active sensor range ({sensorRange * 5} hexes).";
+
+            ship.CrewActionsUsed.Add(action.CrewIndex);
+            int rangePenalty = sensorRange > 0 ? -2 * Math.Max(0, (range + sensorRange - 1) / sensorRange - 1) : 0;
+            int bonus = GetScienceOfficerCheckBonus(ship, action.CrewIndex) + rangePenalty;
+            int penalty = ship.Systems.GetActionPenalty(ShipSystem.Sensors);
+            int dc = (int)Math.Floor(5 + 1.5 * target.Definition.Tier) + target.Definition.Countermeasures;
+            ResolveScienceCheck(ship, action, bonus, penalty, dc, success =>
+            {
+                if (success) _targetedSystems[(ship.InstanceId, target.InstanceId)] = selectedSystem;
+                return success ? $"targets {ShipLogName(target)}'s {selectedSystem}." : $"fails to target {ShipLogName(target)}'s {selectedSystem}.";
+            }, rangePenalty);
+            return null;
+        }
+
+        var shields = ship.Shields;
+        int totalShields = shields.Forward + shields.Starboard + shields.Aft + shields.Port;
+        int minimum = (totalShields + 9) / 10;
+        ShieldAllocation allocation;
+        if (action.BalanceEvenly)
+        {
+            int each = totalShields / 4;
+            int remainder = totalShields % 4;
+            allocation = new ShieldAllocation(each + remainder, each, each, each);
+        }
+        else
+        {
+            if (!Enum.TryParse<Quadrant>(action.FromQuadrant, true, out var from) || !Enum.IsDefined(from) ||
+                !Enum.TryParse<Quadrant>(action.ToQuadrant, true, out var to) || !Enum.IsDefined(to) ||
+                from == to || action.Amount <= 0)
+                return "Choose a source quadrant, a different destination quadrant, and a positive number of shield points.";
+            int[] values = [shields.Forward, shields.Starboard, shields.Aft, shields.Port];
+            if (values[(int)from] - action.Amount < minimum)
+                return $"Each quadrant must retain at least {minimum} shield points after rebalancing.";
+            values[(int)from] -= action.Amount;
+            values[(int)to] += action.Amount;
+            allocation = new ShieldAllocation(values[0], values[1], values[2], values[3]);
+        }
+        if (allocation.Forward < minimum || allocation.Starboard < minimum ||
+            allocation.Aft < minimum || allocation.Port < minimum ||
+            (long)allocation.Forward + allocation.Starboard + allocation.Aft + allocation.Port != totalShields)
+            return $"Reallocate all {totalShields} shield points, with at least {minimum} in each quadrant.";
+
+        ship.CrewActionsUsed.Add(action.CrewIndex);
+        int balanceBonus = GetScienceOfficerCheckBonus(ship, action.CrewIndex);
+        int balancePenalty = ship.Systems.GetActionPenalty(ShipSystem.Sensors);
+        int balanceDc = (int)Math.Floor(10 + 1.5 * ship.Definition.Tier);
+        ResolveScienceCheck(ship, action, balanceBonus, balancePenalty, balanceDc, success =>
+        {
+            if (success)
+            {
+                shields.Forward = allocation.Forward;
+                shields.Starboard = allocation.Starboard;
+                shields.Aft = allocation.Aft;
+                shields.Port = allocation.Port;
+            }
+            return success ? "balances its shields." : "fails to balance its shields.";
+        });
+        return null;
+    }
+
+    public int GetScienceOfficerCheckBonus(ShipInstance ship, int crewIndex)
+    {
+        bool hasListedSkill = ship.Definition.Crew[crewIndex].Skills.ContainsKey("computers") ||
+            ship.Definition.Crew.Any(c => c.Role == "Science Officer" && c.Skills.ContainsKey("computers"));
+        int bonus = ship.CrewBonus(crewIndex, "computers", "Science Officer");
+        return hasListedSkill ? bonus : bonus + ship.Definition.ComputersModifier;
+    }
+
+    private void ResolveScienceCheck(ShipInstance ship, ScienceAction action, int bonus, int systemPenalty, int dc, Func<bool, string> describe, int rangePenalty = 0)
+    {
+        if (systemPenalty == int.MinValue)
+        {
+            LastEvents.Add(new CombatEvent("Helm", ship.InstanceId, $"{ShipLogName(ship)} attempts {action.Action}: sensors wrecked — automatic failure."));
+            return;
+        }
+        bonus += systemPenalty + ship.Systems.PowerCoreGlobalPenalty;
+        int roll = _dice.RollD20();
+        int total = roll + bonus;
+        bool success = total >= dc;
+        string check = rangePenalty < 0
+            ? $"{roll}{(bonus - rangePenalty < 0 ? "" : "+")}{bonus - rangePenalty}{rangePenalty}={total}"
+            : CombatResolver.FormatCheck(roll, bonus, total);
+        LastEvents.Add(new CombatEvent("Helm", ship.InstanceId,
+            $"{ShipLogName(ship)} attempts {action.Action}: Computers {check} vs DC {dc} — {(success ? "SUCCESS" : "FAIL")}, {describe(success)}"));
+    }
+
     /// <summary>
     /// Advances out of the Engineering phase once all ships have acted (or chosen to skip).
     /// </summary>
@@ -824,6 +950,26 @@ public sealed class CombatEngine
             .FirstOrDefault();
         return route is null ? [] : route.Skip(1).ToList();
     }
+
+    /// <summary>Projectiles and paths currently useful to render on the combat map.</summary>
+    public List<TrackingProjectilePreview> GetProjectilePreviews()
+    {
+        var previews = new List<TrackingProjectilePreview>();
+        foreach (var projectile in _state.Projectiles)
+        {
+            previews.Add(new TrackingProjectilePreview(projectile, GetProjectilePreviewPath(projectile)));
+        }
+
+        // A successful launch is pending until Gunnery resolves, but show its predicted
+        // movement immediately so players can see whether the missile can reach its target.
+        if (_state.Phase == CombatPhase.Gunnery)
+            previews.AddRange(_pendingLaunches.Select(launch =>
+                new TrackingProjectilePreview(launch.Projectile, GetProjectilePreviewPath(launch.Projectile))));
+
+        return previews;
+    }
+
+    public sealed record TrackingProjectilePreview(TrackingProjectile Projectile, IReadOnlyList<PathStep> Path);
 
     /// <summary>
     /// Moves the current actor to a specific (position, facing) if it is reachable.
@@ -990,9 +1136,10 @@ public sealed class CombatEngine
 
         if (projectile.Position == target.Position)
         {
+            ShipSystem? targetedSystem = _targetedSystems.Remove((projectile.OwnerShipId, target.InstanceId), out var chosenSystem) ? chosenSystem : null;
             bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
             var result = CombatResolver.ResolveProjectileImpact(projectile, target, _dice, roll, checkBonus, defense, impactFrom,
-                _state.GetShip(projectile.OwnerShipId)?.DivertWeapons == true);
+                _state.GetShip(projectile.OwnerShipId)?.DivertWeapons == true, targetedSystem);
             string ownerName = _state.GetShip(projectile.OwnerShipId) is { } owner ? ShipLogName(owner) : $"Team {projectile.TeamId + 1}";
             LastEvents.Add(new CombatEvent("Gunnery", projectile.OwnerShipId,
                 $"{ownerName}'s {ProjectileLogName(projectile)} hits {ShipLogName(target)}: {result.Description}"));

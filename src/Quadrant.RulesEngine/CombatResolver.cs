@@ -38,11 +38,11 @@ public sealed record DamageResolution(int ShieldDamage, int HullDamage, bool Cri
 /// </summary>
 public static class CombatResolver
 {
-    public static AttackResult ResolveProjectileImpact(TrackingProjectile projectile, ShipInstance target, IDiceRoller dice, int roll, int checkBonus, int defenseValue, Hex impactFrom, bool divertWeapons = false)
+    public static AttackResult ResolveProjectileImpact(TrackingProjectile projectile, ShipInstance target, IDiceRoller dice, int roll, int checkBonus, int defenseValue, Hex impactFrom, bool divertWeapons = false, ShipSystem? targetedSystem = null)
     {
         int rawDamage = projectile.Weapon.Damage.Roll(dice, divertWeapons);
         Quadrant quadrant = target.QuadrantOf(impactFrom);
-        var damage = ApplyDamage(target, quadrant, rawDamage, roll, dice);
+        var damage = ApplyDamage(target, quadrant, rawDamage, roll, dice, targetedSystem);
         int total = roll + checkBonus;
         string desc = $"Tracking check {FormatCheck(roll, checkBonus, total)} vs TL {defenseValue} — IMPACT! {damage.Description}.";
         return AttackResult.Success(total, rawDamage, damage.ShieldDamage, damage.HullDamage,
@@ -78,7 +78,7 @@ public static class CombatResolver
             $"Gunnery {FormatCheck(roll, bonus, total)} vs {defenseName} {defenseValue} — HIT{natural}." + (shouldRollDamage ? $" {damage} damage rolled." : ""));
     }
 
-    public static DamageResolution ApplyDamage(ShipInstance target, Quadrant quadrant, int rawDamage, int attackRoll, IDiceRoller dice)
+    public static DamageResolution ApplyDamage(ShipInstance target, Quadrant quadrant, int rawDamage, int attackRoll, IDiceRoller dice, ShipSystem? targetedSystem = null)
     {
         int overflow = target.Shields.Reduce(quadrant, rawDamage);
         int shieldDamage = rawDamage - overflow;
@@ -96,11 +96,11 @@ public static class CombatResolver
             int current = Math.Max(0, target.TotalHullDamageTaken - 1) / ct;
             thresholdCrossings = current - prior;
         }
-        int criticalCount = hullDamage > 0 ? thresholdCrossings + (attackRoll == 20 ? 1 : 0) : 0;
+        int criticalCount = hullDamage > 0 ? thresholdCrossings + (attackRoll == 20 || (attackRoll == 19 && targetedSystem is not null) ? 1 : 0) : 0;
         var effects = new List<CriticalDamageEffect>();
         for (int i = 0; i < criticalCount; i++)
         {
-            var system = SystemFromPercent(dice.RollPercent(), target);
+            var system = i == 0 && targetedSystem is not null ? targetedSystem.Value : SystemFromPercent(dice.RollPercent(), target);
             effects.Add(new CriticalDamageEffect(system, target.Systems.ApplyCritical(system)));
         }
         string description = $"{rawDamage} dmg ({shieldDamage} shield, {hullDamage} hull)";
