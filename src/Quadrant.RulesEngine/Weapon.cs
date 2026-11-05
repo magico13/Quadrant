@@ -15,6 +15,12 @@ public sealed record Weapon
     /// <summary>Identifier shared by mounts in the same linked battery; null when unlinked.</summary>
     public string? LinkedGroup { get; init; }
 
+    /// <summary>Can fire into either arc adjacent to its installed arc at a –2 penalty.</summary>
+    public bool BroadArc { get; init; }
+
+    /// <summary>Point-defense gunnery bonus; zero when this is not a Point weapon.</summary>
+    public int PointDefenseBonus { get; init; }
+
     /// <summary>Minimum range in hexes (inclusive).</summary>
     public int MinRange { get; init; } = 1;
 
@@ -25,8 +31,10 @@ public sealed record Weapon
     /// </summary>
     public int RangeIncrement { get; init; } = 6;
 
-    /// <summary>Maximum fireable distance in hexes (10 range increments).</summary>
-    public int MaxFireRange => RangeIncrement * 10;
+    /// <summary>Maximum fireable distance in hexes; zero uses the standard 10 increments.</summary>
+    public int MaxRange { get; init; }
+
+    public int MaxFireRange => MaxRange > 0 ? MaxRange : RangeIncrement * 10;
 
     /// <summary>The damage expression rolled on a hit.</summary>
     public required DamageExpression Damage { get; init; }
@@ -54,8 +62,15 @@ public sealed record Weapon
     public bool CanTarget(int range, double angleFromFacing)
     {
         if (range < MinRange || range > MaxFireRange) return false;
-        return ArcCovers(angleFromFacing);
+        return ArcCovers(angleFromFacing) || (BroadArc && AdjacentArcsCover(angleFromFacing));
     }
+
+    /// <summary>Additional attack penalty for firing outside the weapon's installed arc.</summary>
+    public int ArcPenalty(double angleFromFacing)
+        => BroadArc && !ArcCovers(angleFromFacing) && AdjacentArcsCover(angleFromFacing) ? -2 : 0;
+
+    public bool CoversAngle(double angleFromFacing)
+        => ArcCovers(angleFromFacing) || (BroadArc && AdjacentArcsCover(angleFromFacing));
 
     /// <summary>
     /// Computes the cumulative –2 range penalty for firing at the given distance.
@@ -90,6 +105,15 @@ public sealed record Weapon
             _ => false
         };
     }
+
+    private bool AdjacentArcsCover(double angle) => Arc switch
+    {
+        FiringArc.Forward => (angle >= 30 - ArcEps && angle <= 150 + ArcEps) || (angle >= -150 - ArcEps && angle <= -30 + ArcEps),
+        FiringArc.Starboard => (angle >= -30 - ArcEps && angle <= 30 + ArcEps) || angle >= 150 - ArcEps || angle <= -150 + ArcEps,
+        FiringArc.Aft => (angle >= 30 - ArcEps && angle <= 150 + ArcEps) || (angle >= -150 - ArcEps && angle <= -30 + ArcEps),
+        FiringArc.Port => (angle >= -30 - ArcEps && angle <= 30 + ArcEps) || angle >= 150 - ArcEps || angle <= -150 + ArcEps,
+        _ => false
+    };
 }
 
 /// <summary>

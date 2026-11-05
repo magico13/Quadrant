@@ -4,6 +4,7 @@
   "type": "Tracking",
   "minRange": 1,
   "rangeIncrement": 20,
+  "maxRange": 200,
   "damage": "4d8",
   "pcu": 10,
   "cost": 14,

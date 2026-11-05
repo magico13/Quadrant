@@ -10,6 +10,11 @@ public sealed record CombatEvent(string Phase, string ShipId, string Message)
 
 public sealed record PendingHitSnapshot(string AttackerId, string TargetId, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant, ShipSystem? TargetedSystem = null);
 public sealed record PendingLaunchSnapshot(TrackingProjectile Projectile, AttackCheckResult Check);
+public sealed record PendingProjectileImpactSnapshot(TrackingProjectile Projectile, int Roll, int CheckBonus, int Defense, Hex ImpactFrom);
+public sealed record PointDefenseUsedSnapshot(string ShipId, int WeaponIndex);
+public sealed record PointDefenseWeaponOption(int WeaponIndex, string Name, int Bonus);
+public sealed record PointDefenseMissileOption(string ProjectileId, string Name, int Speed, IReadOnlyList<PointDefenseWeaponOption> Weapons);
+public sealed record PointDefensePrompt(string TargetShipId, FiringArc Arc, IReadOnlyList<PointDefenseMissileOption> Missiles);
 public sealed record FiredWeaponSnapshot(string ShipId, int WeaponIndex);
 public sealed record TargetArcSnapshot(string ShipId, string TargetId, FiringArc Arc);
 public sealed record ShieldAllocation(int Forward, int Starboard, int Aft, int Port);
@@ -22,7 +27,11 @@ public sealed record CombatEngineSnapshot(
     List<CombatEngine.MoveOption>? StuntMoves, string? PendingStunt,
     CombatEngine.MoveOption? CommittedMove, int MoveStep, Hex LastUnoccupied,
     Facing LastUnoccupiedFacing, string? FreeAttackShipId, List<CombatEvent> Events,
-    List<TargetedSystemSnapshot>? TargetedSystems = null);
+    List<TargetedSystemSnapshot>? TargetedSystems = null,
+    List<PendingProjectileImpactSnapshot>? PendingImpacts = null,
+    List<PointDefenseUsedSnapshot>? PointDefenseUsed = null,
+    List<string>? PassedPointDefenseProjectiles = null,
+    bool GunneryResolutionPrepared = false);
 
 /// <summary>
 /// The authoritative combat engine. Owns the game state and advances it through
@@ -38,7 +47,11 @@ public sealed class CombatEngine
     private readonly IDiceRoller _dice;
     private readonly List<(ShipInstance Attacker, ShipInstance Target, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant, ShipSystem? TargetedSystem)> _pendingHits = [];
     private readonly List<(TrackingProjectile Projectile, AttackCheckResult Check)> _pendingLaunches = [];
+    private readonly List<PendingProjectileImpactSnapshot> _pendingProjectileImpacts = [];
     private readonly HashSet<(string ShipId, int WeaponIndex)> _firedWeapons = [];
+    private readonly HashSet<(string ShipId, int WeaponIndex)> _pointDefenseUsed = [];
+    private readonly HashSet<string> _passedPointDefenseProjectiles = [];
+    private bool _gunneryResolutionPrepared;
     private readonly Dictionary<(string ShipId, string TargetId), FiringArc> _targetArcChoices = [];
     private readonly Dictionary<(string ShipId, string TargetId), ShipSystem> _targetedSystems = [];
     private List<MoveOption>? _stuntMoves;
@@ -49,6 +62,8 @@ public sealed class CombatEngine
     private Facing _lastUnoccupiedFacing;
     public string? FreeAttackShipId { get; private set; }
     public bool HasPendingFreeAttack => FreeAttackShipId is not null;
+
+    public PointDefensePrompt? PendingPointDefense => _gunneryResolutionPrepared ? GetPointDefensePrompt() : null;
 
     public IReadOnlyList<TargetedSystemSnapshot> GetTargetedSystems(string shipId)
         => _targetedSystems.Where(t => t.Key.ShipId == shipId)
@@ -158,7 +173,10 @@ public sealed class CombatEngine
         _targetArcChoices.Select(a => new TargetArcSnapshot(a.Key.ShipId, a.Key.TargetId, a.Value)).ToList(),
         _stuntMoves, PendingStunt, _committedMove, _moveStep, _lastUnoccupied, _lastUnoccupiedFacing,
         FreeAttackShipId, LastEvents.ToList(),
-        _targetedSystems.Select(t => new TargetedSystemSnapshot(t.Key.ShipId, t.Key.TargetId, t.Value)).ToList());
+        _targetedSystems.Select(t => new TargetedSystemSnapshot(t.Key.ShipId, t.Key.TargetId, t.Value)).ToList(),
+        _pendingProjectileImpacts.ToList(),
+        _pointDefenseUsed.Select(x => new PointDefenseUsedSnapshot(x.ShipId, x.WeaponIndex)).ToList(),
+        _passedPointDefenseProjectiles.ToList(), _gunneryResolutionPrepared);
 
     public void RestoreSnapshot(CombatEngineSnapshot snapshot)
     {
@@ -166,7 +184,11 @@ public sealed class CombatEngine
             _pendingHits.Add((_state.GetShip(h.AttackerId) ?? throw new InvalidDataException("Missing attacker in saved game."),
                 _state.GetShip(h.TargetId) ?? throw new InvalidDataException("Missing target in saved game."), h.Weapon, h.Check, h.Quadrant, h.TargetedSystem));
         foreach (var l in snapshot.PendingLaunches) _pendingLaunches.Add((l.Projectile, l.Check));
+        _pendingProjectileImpacts.AddRange(snapshot.PendingImpacts ?? []);
         foreach (var w in snapshot.FiredWeapons) _firedWeapons.Add((w.ShipId, w.WeaponIndex));
+        foreach (var w in snapshot.PointDefenseUsed ?? []) _pointDefenseUsed.Add((w.ShipId, w.WeaponIndex));
+        foreach (var id in snapshot.PassedPointDefenseProjectiles ?? []) _passedPointDefenseProjectiles.Add(id);
+        _gunneryResolutionPrepared = snapshot.GunneryResolutionPrepared;
         foreach (var a in snapshot.TargetArcs) _targetArcChoices.Add((a.ShipId, a.TargetId), a.Arc);
         foreach (var target in snapshot.TargetedSystems ?? []) _targetedSystems.Add((target.ShipId, target.TargetShipId), target.System);
         _stuntMoves = snapshot.StuntMoves;
@@ -177,6 +199,10 @@ public sealed class CombatEngine
         _lastUnoccupiedFacing = snapshot.LastUnoccupiedFacing;
         FreeAttackShipId = snapshot.FreeAttackShipId;
         LastEvents.AddRange(snapshot.Events);
+
+        var pendingImpactIds = _pendingProjectileImpacts.Select(impact => impact.Projectile.Id).ToHashSet();
+        _state.Projectiles.RemoveAll(projectile => !pendingImpactIds.Contains(projectile.Id) &&
+            _state.GetShip(projectile.TargetShipId)?.Position == projectile.Position);
     }
 
     public IReadOnlyList<int> FiredWeaponIndices
@@ -224,48 +250,10 @@ public sealed class CombatEngine
                 break;
 
             case CombatPhase.Gunnery:
-                var projectilesAlreadyInFlight = _state.Projectiles.ToList();
-                var alreadyDestroyed = _state.Ships.Where(s => s.IsDestroyed).Select(s => s.InstanceId).ToHashSet();
-                foreach (var projectile in projectilesAlreadyInFlight)
-                {
-                    var target = _state.GetShip(projectile.TargetShipId);
-                    if (target is null || alreadyDestroyed.Contains(target.InstanceId))
-                    {
-                        LastEvents.Add(new CombatEvent("Gunnery", projectile.OwnerShipId, $"{ProjectileLogName(projectile)} loses its target and is removed."));
-                        _state.Projectiles.Remove(projectile);
-                        continue;
-                    }
-                    int roll = _dice.RollD20();
-                    ResolveProjectile(projectile, roll, projectile.GunnerBonus, target.CurrentTL);
-                }
-                foreach (var (projectile, check) in _pendingLaunches)
-                {
-                    _state.Projectiles.Add(projectile);
-                    ResolveProjectile(projectile, check.Roll, check.Modifier, check.DefenseValue);
-                }
-                _pendingLaunches.Clear();
-                foreach (var (attacker, target, weapon, check, quadrant, targetedSystem) in _pendingHits)
-                {
-                    int rolledDamage = weapon.Damage.Roll(_dice, attacker.DivertWeapons);
-                    bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
-                    var damage = CombatResolver.ApplyDamage(target, quadrant, rolledDamage, check.Roll, _dice, targetedSystem);
-                    LastEvents.Add(new CombatEvent("Gunnery", attacker.InstanceId,
-                        $"{ShipLogName(target)} takes damage from {ShipLogName(attacker)}'s {weapon.Name}: {damage.Description}."));
-                    LogShipStatusChange(target, wasDisabled, wasDestroyed, "Gunnery");
-                }
-                _pendingHits.Clear();
-                _firedWeapons.Clear();
-                _targetArcChoices.Clear();
-                // End of round — check for victory, then start next round.
-                CheckVictory();
-                if (!_state.IsComplete)
-                {
-                    _state.Round++;
-                    _state.Phase = CombatPhase.CrewSetup;
-                    foreach (var ship in _state.Ships)
-                        ship.BeginRound();
-                    LastEvents.Add(new CombatEvent("CrewSetup", "", $"Round {_state.Round} — assign crew roles."));
-                }
+                if (!_gunneryResolutionPrepared)
+                    PrepareGunneryResolution();
+                if (ResolveAutomaticPointDefense()) return;
+                FinishGunneryResolution();
                 break;
         }
     }
@@ -495,10 +483,10 @@ public sealed class CombatEngine
             if (selectedArc is null && availableArcs.Count == 1) selectedArc = availableArcs[0];
             if (selectedArc is null && (weapon.Arc != FiringArc.AllArcs || availableArcs.Count > 0)) return null;
             if (selectedArc is not null && ((!alreadyChosen && !availableArcs.Contains(selectedArc.Value)) ||
-                (weapon.Arc != FiringArc.AllArcs && weapon.Arc != selectedArc))) return null;
+                (weapon.Arc != FiringArc.AllArcs && !weapon.BroadArc && weapon.Arc != selectedArc))) return null;
             if (selectedArc is not null) _targetArcChoices[arcKey] = selectedArc.Value;
         }
-        else if (_targetArcChoices.TryGetValue(arcKey, out var selectedArc) && weapon.Arc != FiringArc.AllArcs && weapon.Arc != selectedArc)
+        else if (_targetArcChoices.TryGetValue(arcKey, out var selectedArc) && weapon.Arc != FiringArc.AllArcs && !weapon.BroadArc && weapon.Arc != selectedArc)
         {
             return null;
         }
@@ -947,7 +935,7 @@ public sealed class CombatEngine
     public List<PathStep> GetProjectilePreviewPath(TrackingProjectile projectile)
     {
         var target = _state.GetShip(projectile.TargetShipId);
-        if (target is null) return [];
+        if (target is null || projectile.Position == target.Position) return [];
         var definition = new ShipDefinition
         {
             Id = projectile.Id, Name = projectile.Name, Speed = projectile.Speed,
@@ -959,7 +947,6 @@ public sealed class CombatEngine
         var route = routes
             .Where(kv => kv.Value.Any(step => step.Position != projectile.Position))
             .OrderBy(kv => kv.Key.Pos.DistanceTo(target.Position))
-            .ThenByDescending(kv => kv.Value.Zip(kv.Value.Skip(1)).Count(pair => pair.First.Position != pair.Second.Position))
             .ThenBy(kv => kv.Value.Count)
             .Select(kv => kv.Value)
             .FirstOrDefault();
@@ -1031,7 +1018,7 @@ public sealed class CombatEngine
     }
 
     /// <summary>A weapon that the current actor can fire at a specific target.</summary>
-    public sealed record TargetOption(string WeaponName, string TargetShipId, int Range, int HitChancePercent, int WeaponIndex, int RangePenalty, FiringArc Arc, bool ArcChoiceRequired, List<FiringArc> ArcChoices);
+    public sealed record TargetOption(string WeaponName, string TargetShipId, int Range, int HitChancePercent, int WeaponIndex, int RangePenalty, int ArcPenalty, FiringArc Arc, bool BroadArc, bool ArcChoiceRequired, List<FiringArc> ArcChoices);
 
     /// <summary>
     /// Computes all valid, unfired, available (weapon, target) pairs for the current actor during Gunnery.
@@ -1079,7 +1066,7 @@ public sealed class CombatEngine
                 double angle = ship.AngleFromFacing(target.Position);
                 if (!weapon.CanTarget(range, angle)) continue;
                 var choices = arcChoices.GetValueOrDefault(target.InstanceId) ?? [];
-                if (choices.Count > 0 && _targetArcChoices.TryGetValue((ship.InstanceId, target.InstanceId), out var committedArc) && weapon.Arc != FiringArc.AllArcs && weapon.Arc != committedArc)
+                if (choices.Count > 0 && _targetArcChoices.TryGetValue((ship.InstanceId, target.InstanceId), out var committedArc) && weapon.Arc != FiringArc.AllArcs && !weapon.BroadArc && weapon.Arc != committedArc)
                     continue;
 
                 int defenseValue = weapon.Type switch
@@ -1088,10 +1075,11 @@ public sealed class CombatEngine
                     _ => target.CurrentAC
                 };
                 int rangePenalty = weapon.RangePenalty(range);
-                int effectiveBonus = bonus == int.MinValue ? bonus : bonus + rangePenalty;
+                int arcPenalty = weapon.ArcPenalty(angle);
+                int effectiveBonus = bonus == int.MinValue ? bonus : bonus + rangePenalty + arcPenalty;
                 int hitChance = CombatResolver.HitChancePercent(effectiveBonus, defenseValue);
                 bool choiceRequired = choices.Count > 1 && !_targetArcChoices.ContainsKey((ship.InstanceId, target.InstanceId));
-                options.Add(new TargetOption(CombineLinkedWeapon(ship, wi, mountIndices).Name, target.InstanceId, range, hitChance, wi, rangePenalty, weapon.Arc, choiceRequired, choices));
+                options.Add(new TargetOption(CombineLinkedWeapon(ship, wi, mountIndices).Name, target.InstanceId, range, hitChance, wi, rangePenalty, arcPenalty, weapon.Arc, weapon.BroadArc, choiceRequired, choices));
             }
         }
         return options;
@@ -1110,6 +1098,7 @@ public sealed class CombatEngine
         var matching = ship.Weapons.Select((candidate, index) => (candidate, index))
             .Where(x => x.candidate.Type == WeaponType.DirectFire &&
                 x.candidate.LinkedGroup == weapon.LinkedGroup && x.candidate.Arc == weapon.Arc &&
+                x.candidate.BroadArc == weapon.BroadArc &&
                 x.candidate.Name == weapon.Name && x.candidate.Damage == weapon.Damage &&
                 x.candidate.MinRange == weapon.MinRange && x.candidate.RangeIncrement == weapon.RangeIncrement &&
                 x.candidate.LimitedFireUses == weapon.LimitedFireUses)
@@ -1183,7 +1172,7 @@ public sealed class CombatEngine
         var target = _state.GetShip(projectile.TargetShipId);
         if (target is null)
         {
-            _state.Projectiles.Remove(projectile);
+            _state.Projectiles.RemoveAll(candidate => candidate.Id == projectile.Id);
             return;
         }
         int total = roll + checkBonus;
@@ -1192,7 +1181,7 @@ public sealed class CombatEngine
             string ownerName = _state.GetShip(projectile.OwnerShipId) is { } owner ? ShipLogName(owner) : $"Team {projectile.TeamId + 1}";
             LastEvents.Add(new CombatEvent("Gunnery", projectile.OwnerShipId,
                 $"{ownerName}'s {ProjectileLogName(projectile)} tracking check {CombatResolver.FormatCheck(roll, checkBonus, total)} vs TL {defense} — MISS, projectile lost."));
-            _state.Projectiles.Remove(projectile);
+            _state.Projectiles.RemoveAll(candidate => candidate.Id == projectile.Id);
             return;
         }
 
@@ -1209,20 +1198,180 @@ public sealed class CombatEngine
 
         if (projectile.Position == target.Position)
         {
-            ShipSystem? targetedSystem = _targetedSystems.Remove((projectile.OwnerShipId, target.InstanceId), out var chosenSystem) ? chosenSystem : null;
-            bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
-            var result = CombatResolver.ResolveProjectileImpact(projectile, target, _dice, roll, checkBonus, defense, impactFrom,
-                _state.GetShip(projectile.OwnerShipId)?.DivertWeapons == true, targetedSystem);
-            string ownerName = _state.GetShip(projectile.OwnerShipId) is { } owner ? ShipLogName(owner) : $"Team {projectile.TeamId + 1}";
-            LastEvents.Add(new CombatEvent("Gunnery", projectile.OwnerShipId,
-                $"{ownerName}'s {ProjectileLogName(projectile)} hits {ShipLogName(target)}: {result.Description}"));
-            LogShipStatusChange(target, wasDisabled, wasDestroyed, "Gunnery");
-            _state.Projectiles.Remove(projectile);
+            _pendingProjectileImpacts.Add(new PendingProjectileImpactSnapshot(projectile, roll, checkBonus, defense, impactFrom));
         }
         else
         {
             LastEvents.Add(new CombatEvent("Gunnery", projectile.OwnerShipId,
                 $"{ProjectileLogName(projectile)} advances {moved} hexes toward {ShipLogName(target)}. Gunnery: {CombatResolver.FormatCheck(roll, checkBonus, total)} vs TL {defense}."));
+        }
+    }
+
+    private void PrepareGunneryResolution()
+    {
+        var alreadyDestroyed = _state.Ships.Where(s => s.IsDestroyed).Select(s => s.InstanceId).ToHashSet();
+        foreach (var projectile in _state.Projectiles.ToList())
+        {
+            var target = _state.GetShip(projectile.TargetShipId);
+            if (target is null || alreadyDestroyed.Contains(target.InstanceId))
+            {
+                LastEvents.Add(new CombatEvent("Gunnery", projectile.OwnerShipId, $"{ProjectileLogName(projectile)} loses its target and is removed."));
+                _state.Projectiles.RemoveAll(candidate => candidate.Id == projectile.Id);
+                continue;
+            }
+            ResolveProjectile(projectile, _dice.RollD20(), projectile.GunnerBonus, target.CurrentTL);
+        }
+        foreach (var (projectile, check) in _pendingLaunches)
+        {
+            _state.Projectiles.Add(projectile);
+            ResolveProjectile(projectile, check.Roll, check.Modifier, check.DefenseValue);
+        }
+        _pendingLaunches.Clear();
+        _gunneryResolutionPrepared = true;
+    }
+
+    /// <summary>Pending point-defense choice, if multiple missiles share an eligible ship arc.</summary>
+    private PointDefensePrompt? GetPointDefensePrompt()
+    {
+        foreach (var group in GetPointDefenseGroups())
+        {
+            if (group.Impacts.Count < 2) continue;
+            var target = _state.GetShip(group.TargetShipId)!;
+            var missiles = group.Impacts.Select(impact => new PointDefenseMissileOption(
+                impact.Projectile.Id, ProjectileLogName(impact.Projectile), impact.Projectile.Speed,
+                GetAvailablePointDefenseWeapons(impact).Select(index => new PointDefenseWeaponOption(index,
+                    target.Weapons[index].Name, target.Weapons[index].PointDefenseBonus)).ToList())).ToList();
+            return new PointDefensePrompt(group.TargetShipId, group.Arc, missiles);
+        }
+        return null;
+    }
+
+    private sealed record PointDefenseGroup(string TargetShipId, FiringArc Arc, List<PendingProjectileImpactSnapshot> Impacts);
+
+    private List<PointDefenseGroup> GetPointDefenseGroups()
+        => _pendingProjectileImpacts
+            .Where(impact => !_passedPointDefenseProjectiles.Contains(impact.Projectile.Id) && GetAvailablePointDefenseWeapons(impact).Count > 0)
+            .GroupBy(impact =>
+            {
+                var target = _state.GetShip(impact.Projectile.TargetShipId)!;
+                var quadrant = target.QuadrantOf(impact.ImpactFrom);
+                return (impact.Projectile.TargetShipId, Arc: FiringArcFor(quadrant));
+            })
+            .Select(group => new PointDefenseGroup(group.Key.TargetShipId, group.Key.Arc, group.ToList()))
+            .ToList();
+
+    private List<int> GetAvailablePointDefenseWeapons(PendingProjectileImpactSnapshot impact)
+    {
+        var target = _state.GetShip(impact.Projectile.TargetShipId);
+        if (target is null || target.IsDestroyed) return [];
+        double angle = target.AngleFromFacing(impact.ImpactFrom);
+        return target.Weapons.Select((weapon, index) => (weapon, index))
+            .Where(x => x.weapon.PointDefenseBonus > 0 && x.weapon.CoversAngle(angle) &&
+                !_pointDefenseUsed.Contains((target.InstanceId, x.index)) && target.HasWeaponUses(x.index))
+            .Select(x => x.index).ToList();
+    }
+
+    private static FiringArc FiringArcFor(Quadrant quadrant) => quadrant switch
+    {
+        Quadrant.Forward => FiringArc.Forward,
+        Quadrant.Starboard => FiringArc.Starboard,
+        Quadrant.Aft => FiringArc.Aft,
+        Quadrant.Port => FiringArc.Port,
+        _ => FiringArc.Forward
+    };
+
+    private bool ResolveAutomaticPointDefense()
+    {
+        while (true)
+        {
+            var groups = GetPointDefenseGroups();
+            var prompt = groups.FirstOrDefault(group => group.Impacts.Count > 1);
+            if (prompt is not null) return true;
+            var single = groups.FirstOrDefault();
+            if (single is null) return false;
+            var impact = single.Impacts[0];
+            ResolvePointDefenseAttempts(impact, GetAvailablePointDefenseWeapons(impact));
+            _passedPointDefenseProjectiles.Add(impact.Projectile.Id);
+        }
+    }
+
+    public string? ResolvePointDefense(string projectileId, bool attempt)
+    {
+        var prompt = PendingPointDefense;
+        if (prompt is null) return "No point-defense choice is pending.";
+        var missile = prompt.Missiles.FirstOrDefault(option => option.ProjectileId == projectileId);
+        if (missile is null) return "That missile is not part of the pending point-defense choice.";
+        var impact = _pendingProjectileImpacts.FirstOrDefault(item => item.Projectile.Id == projectileId);
+        if (impact is null) return "That missile is no longer awaiting damage.";
+        if (attempt) ResolvePointDefenseAttempts(impact, missile.Weapons.Select(weapon => weapon.WeaponIndex).ToList());
+        _passedPointDefenseProjectiles.Add(projectileId);
+        AdvancePhase();
+        return null;
+    }
+
+    private void ResolvePointDefenseAttempts(PendingProjectileImpactSnapshot impact, IReadOnlyList<int> weaponIndices)
+    {
+        var target = _state.GetShip(impact.Projectile.TargetShipId);
+        if (target is null) return;
+        int dc = 10 + impact.Projectile.Speed;
+        foreach (int weaponIndex in weaponIndices)
+        {
+            if (weaponIndex < 0 || weaponIndex >= target.Weapons.Count || !target.HasWeaponUses(weaponIndex) ||
+                !_pointDefenseUsed.Add((target.InstanceId, weaponIndex))) continue;
+            var weapon = target.Weapons[weaponIndex];
+            target.ConsumeWeaponUse(weaponIndex);
+            int roll = _dice.RollD20();
+            int total = roll + weapon.PointDefenseBonus;
+            bool hit = roll == 20 || (roll != 1 && total >= dc);
+            LastEvents.Add(new CombatEvent("Gunnery", target.InstanceId,
+                $"{ShipLogName(target)} uses {weapon.Name} for point defense against {ProjectileLogName(impact.Projectile)}: {CombatResolver.FormatCheck(roll, weapon.PointDefenseBonus, total)} vs DC {dc} — {(hit ? "HIT, projectile destroyed." : "MISS.")}"));
+            if (!hit) continue;
+            _pendingProjectileImpacts.Remove(impact);
+            _state.Projectiles.RemoveAll(projectile => projectile.Id == impact.Projectile.Id);
+            break;
+        }
+    }
+
+    private void FinishGunneryResolution()
+    {
+        foreach (var impact in _pendingProjectileImpacts.ToList())
+        {
+            var projectile = impact.Projectile;
+            var target = _state.GetShip(projectile.TargetShipId);
+            if (target is null || target.IsDestroyed) continue;
+            ShipSystem? targetedSystem = _targetedSystems.Remove((projectile.OwnerShipId, target.InstanceId), out var chosenSystem) ? chosenSystem : null;
+            bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
+            var result = CombatResolver.ResolveProjectileImpact(projectile, target, _dice, impact.Roll, impact.CheckBonus, impact.Defense, impact.ImpactFrom,
+                _state.GetShip(projectile.OwnerShipId)?.DivertWeapons == true, targetedSystem);
+            string ownerName = _state.GetShip(projectile.OwnerShipId) is { } owner ? ShipLogName(owner) : $"Team {projectile.TeamId + 1}";
+            LastEvents.Add(new CombatEvent("Gunnery", projectile.OwnerShipId,
+                $"{ownerName}'s {ProjectileLogName(projectile)} hits {ShipLogName(target)}: {result.Description}"));
+            LogShipStatusChange(target, wasDisabled, wasDestroyed, "Gunnery");
+            _state.Projectiles.RemoveAll(candidate => candidate.Id == projectile.Id);
+        }
+        _pendingProjectileImpacts.Clear();
+        foreach (var (attacker, target, weapon, check, quadrant, targetedSystem) in _pendingHits)
+        {
+            int rolledDamage = weapon.Damage.Roll(_dice, attacker.DivertWeapons);
+            bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
+            var damage = CombatResolver.ApplyDamage(target, quadrant, rolledDamage, check.Roll, _dice, targetedSystem);
+            LastEvents.Add(new CombatEvent("Gunnery", attacker.InstanceId,
+                $"{ShipLogName(target)} takes damage from {ShipLogName(attacker)}'s {weapon.Name}: {damage.Description}."));
+            LogShipStatusChange(target, wasDisabled, wasDestroyed, "Gunnery");
+        }
+        _pendingHits.Clear();
+        _firedWeapons.Clear();
+        _targetArcChoices.Clear();
+        _pointDefenseUsed.Clear();
+        _passedPointDefenseProjectiles.Clear();
+        _gunneryResolutionPrepared = false;
+        CheckVictory();
+        if (!_state.IsComplete)
+        {
+            _state.Round++;
+            _state.Phase = CombatPhase.CrewSetup;
+            foreach (var ship in _state.Ships) ship.BeginRound();
+            LastEvents.Add(new CombatEvent("CrewSetup", "", $"Round {_state.Round} — assign crew roles."));
         }
     }
 

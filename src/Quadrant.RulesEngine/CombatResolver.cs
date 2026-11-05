@@ -61,7 +61,7 @@ public static class CombatResolver
         int bonus = gunnerBonus ?? ComputeGunnerBonus(attacker);
         if (bonus == int.MinValue)
             return new(false, 0, 0, 0, defenseValue, defenseName, 0, "Weapons array is wrecked — attack auto-fails.");
-        bonus += weapon.RangePenalty(range);
+        bonus += weapon.RangePenalty(range) + weapon.ArcPenalty(attacker.AngleFromFacing(target.Position));
         int roll = dice.RollD20();
         int total = roll + bonus;
         bool hit = roll == 20 || (roll != 1 && total >= defenseValue);

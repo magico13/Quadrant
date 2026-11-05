@@ -172,8 +172,11 @@ public class ShipCatalogService
                     Name = wDef.Name,
                     Arc = ParseArc(wRef.Arc),
                     LinkedGroup = wRef.LinkedGroup,
+                    BroadArc = wDef.Special.Any(s => string.Equals(s, "Broad Arc", StringComparison.OrdinalIgnoreCase)),
+                    PointDefenseBonus = ParsePointDefenseBonus(wDef.Special),
                     MinRange = wDef.MinRange,
                     RangeIncrement = wDef.RangeIncrement,
+                    MaxRange = wDef.MaxRange,
                     Damage = DamageExpression.From(wRef.Damage ?? wDef.Damage),
                     Type = wDef.Type == "Tracking" ? WeaponType.Tracking : WeaponType.DirectFire,
                     ProjectileSpeed = wDef.Speed,
@@ -225,6 +228,14 @@ public class ShipCatalogService
         if (tag is null) return 0;
         var digits = new string(tag.Where(char.IsDigit).ToArray());
         return int.TryParse(digits, out int uses) ? uses : 0;
+    }
+
+    private static int ParsePointDefenseBonus(IEnumerable<string> specialProperties)
+    {
+        var tag = specialProperties.FirstOrDefault(s => s.StartsWith("Point", StringComparison.OrdinalIgnoreCase));
+        if (tag is null) return 0;
+        var match = System.Text.RegularExpressions.Regex.Match(tag, @"\bPoint\s*\(\s*\+?(\d+)\s*\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return match.Success && int.TryParse(match.Groups[1].Value, out int bonus) ? bonus : 0;
     }
 
     private static int ParseSystemRank(IEnumerable<string>? systems, string system)
@@ -336,6 +347,7 @@ public class WeaponDef
     public string Type { get; set; } = "Direct-Fire";
     public int MinRange { get; set; } = 1;
     public int RangeIncrement { get; set; } = 5;
+    public int MaxRange { get; set; }
     public int Speed { get; set; }
     public required string Damage { get; set; }
     public int Pcu { get; set; }

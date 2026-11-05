@@ -21,6 +21,7 @@ let detailsShipId = null;  // ship currently shown in the details panel
 let lastActiveShipId = null;
 let pendingMove = null;    // helm: { option, actorId } — move previewed, awaiting confirmation
 let refreshGunnery = null; // module-scope handle to the current gunnery refresh fn
+let renderedLogCount = 0;
 
 function assignGunneryTarget(weaponIndex, targetId) {
     const fired = new Set(state.firedWeaponIndices || []);
@@ -56,7 +57,14 @@ async function api(path, body, method = 'POST') {
 
 async function fetchState() {
     state = await api(`/state/${roomCode}`, null, 'GET');
-    for (const e of state.log) addLog(e.phase, e.message);
+    // The API sends the full persisted battle log; append only entries the
+    // current page has not rendered yet.
+    if (state.log.length < renderedLogCount) {
+        logEl.innerHTML = '';
+        renderedLogCount = 0;
+    }
+    for (const e of state.log.slice(renderedLogCount)) addLog(e.phase, e.message);
+    renderedLogCount = state.log.length;
     render();
 }
 
@@ -80,6 +88,7 @@ async function launchGame(selections) {
     lastActiveShipId = null;
     hideShipDetails();
     logEl.innerHTML = '';
+    renderedLogCount = 0;
     hideSetup();
     history.replaceState(null, '', `/${roomCode}`);
     await fetchState();
@@ -231,6 +240,11 @@ function render() {
 
     renderRoster();
 
+    if (state.pendingPointDefense) {
+        renderPointDefense(state.pendingPointDefense);
+        return;
+    }
+
     // Refresh the details panel if a ship is still selected.
     if (detailsShipId) {
         const s = state.ships.find(x => x.id === detailsShipId);
@@ -252,6 +266,45 @@ function render() {
         case 'Gunnery': renderGunnery(); break;
         default: renderComplete();
     }
+}
+
+function renderPointDefense(prompt) {
+    grid.setHighlights([]);
+    grid.setTargets([]);
+    grid.setGhost(null);
+    grid.setPath(null);
+    const defender = state.ships.find(ship => ship.id === prompt.targetShipId);
+    const missiles = prompt.missiles || [];
+    actionPanel.innerHTML = `
+        <div class="actor-name" style="color:${teamColor(defender?.teamId ?? 0)}">Point Defense: ${prompt.targetName}</div>
+        <div class="hint">${missiles.length > 1
+            ? `Multiple missiles are reaching the ${prompt.arc} arc. Choose which to defend, or pass on one. If only one remains, its available Point weapons will fire automatically.`
+            : `A missile is reaching the ${prompt.arc} arc. Its available Point weapons will fire automatically.`}</div>
+        <div class="weapon-chips">${missiles.map(missile => `
+            <div class="target-info">
+                <strong>${missile.name}</strong> · speed ${missile.speed}
+                <div class="hint">Point weapons: ${missile.weapons.map(weapon => `${weapon.name} (+${weapon.bonus})`).join(', ')}</div>
+                ${missiles.length > 1 ? `<button class="btn btn-primary" data-point-defense="${missile.projectileId}" data-attempt="true">Defend this missile</button>
+                <button class="btn btn-ghost" data-point-defense="${missile.projectileId}" data-attempt="false">Pass on this missile</button>` : ''}
+            </div>`).join('')}</div>`;
+    if (missiles.length === 1) {
+        const missile = missiles[0];
+        actionPanel.querySelectorAll('[data-point-defense]').forEach(button => button.remove());
+        const controls = document.createElement('div');
+        controls.innerHTML = `<button class="btn btn-primary" id="btn-point-defense">Resolve Point Defense</button>`;
+        actionPanel.appendChild(controls);
+        document.getElementById('btn-point-defense').addEventListener('click', () => resolvePointDefense(missile.projectileId, true));
+    } else {
+        actionPanel.querySelectorAll('[data-point-defense]').forEach(button => button.addEventListener('click', () =>
+            resolvePointDefense(button.dataset.pointDefense, button.dataset.attempt === 'true')));
+    }
+}
+
+async function resolvePointDefense(projectileId, attempt) {
+    try {
+        await api(`/${roomCode}/point-defense`, { projectileId, attempt });
+        await fetchState();
+    } catch (err) { addLog('error', `Point defense failed: ${err.message}`); }
 }
 
 function currentActor() {
@@ -638,7 +691,7 @@ function angleFromFacing(facing, relQ, relR) {
 // Visual only — used to show where the weapon can reach during Gunnery.
 // Each hex is tagged with `band` (1 = first increment, 2 = second, ...) so the
 // renderer can fade each successive increment.
-function rangeBandHexes(ship, minR, maxR, arc, inc) {
+function rangeBandHexes(ship, minR, maxR, arc, inc, broadArc = false) {
     const out = [];
     for (let r = -maxR; r <= maxR; r++) {
         for (let q = -maxR; q <= maxR; q++) {
@@ -646,11 +699,21 @@ function rangeBandHexes(ship, minR, maxR, arc, inc) {
             const d = Hex.distance({ q: 0, r: 0 }, { q, r });
             if (d < minR || d > maxR) continue;
             const angle = angleFromFacing(ship.facing, q, r);
-            if (!arcCovers(arc, angle)) continue;
+            if (!arcCovers(arc, angle) && !(broadArc && broadArcCovers(arc, angle))) continue;
             out.push({ q: ship.q + q, r: ship.r + r, band: Math.ceil(d / (inc || 1)) });
         }
     }
     return out;
+}
+
+function broadArcCovers(arc, angle) {
+    switch (arc) {
+        case 'Forward': return arcCovers('Port', angle) || arcCovers('Starboard', angle);
+        case 'Port':
+        case 'Starboard': return arcCovers('Forward', angle) || arcCovers('Aft', angle);
+        case 'Aft': return arcCovers('Port', angle) || arcCovers('Starboard', angle);
+        default: return false;
+    }
 }
 
 // ── Gunnery ──
@@ -699,7 +762,7 @@ function renderGunnery() {
         if (selectedShots.has(widx)) continue;
         if ([...selectedShots.keys()].filter(i => !fired.has(i)).length >= actor.crewShotsRemaining) break;
         const eligible = opts.filter(o => !o.arcChoiceRequired || !selectedTargetArcs.has(o.targetShipId) ||
-            o.arc === 'AllArcs' || o.arc === selectedTargetArcs.get(o.targetShipId));
+            o.arc === 'AllArcs' || o.broadArc || o.arc === selectedTargetArcs.get(o.targetShipId));
         if (!eligible.length) continue;
         const closest = eligible.reduce((best, o) => o.range < best.range ? o : best);
         selectedShots.set(widx, closest.targetShipId);
@@ -718,12 +781,13 @@ function renderGunnery() {
     const chips = [...chipIndices].sort((a, b) => a - b).map(widx => {
         const w = actor.weapons?.[widx];
         if (!w) return '';
-        const arcLabel = w.arc && w.arc !== 'AllArcs' ? ` (${w.arc})` : '';
+        const arcLabel = w.arc && w.arc !== 'AllArcs' ? ` (${w.arc}${w.broadArc ? ' + Broad Arc' : ''})` : '';
         const dmg = ` · ${w.damage}`;
         const ammo = w.limitedFireUses > 0 ? ` · ${w.usesRemaining}/${w.limitedFireUses}` : '';
         const exhausted = w.limitedFireUses > 0 && w.usesRemaining === 0;
         const isFired = fired.has(widx);
-        return `<button class="weapon-chip${activeWeapon === widx ? ' active' : ''}${isFired ? ' fired' : ''}" data-weapon="${widx}" ${(exhausted || isFired) ? `disabled title="${isFired ? 'Already fired this round' : 'Out of ammunition'}"` : ''}>${w.displayName || w.name}${arcLabel}${dmg}${ammo}${isFired ? ' · FIRED' : ''}</button>`;
+        const broadArcTitle = w.broadArc ? 'Can also fire into adjacent arcs at −2.' : '';
+        return `<button class="weapon-chip${activeWeapon === widx ? ' active' : ''}${isFired ? ' fired' : ''}" data-weapon="${widx}" title="${isFired ? 'Already fired this round' : exhausted ? 'Out of ammunition' : broadArcTitle}" ${(exhausted || isFired) ? 'disabled' : ''}>${w.displayName || w.name}${arcLabel}${dmg}${ammo}${isFired ? ' · FIRED' : ''}</button>`;
     }).join('');
 
     actionPanel.innerHTML = `
@@ -761,11 +825,11 @@ function renderGunnery() {
             const w = actor.weapons?.[activeWeapon];
             if (w) {
                 const inc = w.rangeIncrement ?? 5;
-                const maxVis = inc * 3; // show up to 3 increments
-                const hexes = rangeBandHexes(actor, w.minRange ?? 1, maxVis, w.arc, inc);
+                const maxVis = Math.min(w.maxRange ?? inc * 10, inc * 3); // show up to 3 increments, capped at max range
+                const hexes = rangeBandHexes(actor, w.minRange ?? 1, maxVis, w.arc, inc, w.broadArc);
                 grid.setRangeHexes(hexes);
             }
-            const label = w ? `${w.name}${w.arc && w.arc !== 'AllArcs' ? ` (${w.arc})` : ''}` : activeWeapon;
+            const label = w ? `${w.name}${w.arc && w.arc !== 'AllArcs' ? ` (${w.arc}${w.broadArc ? ' + Broad Arc' : ''})` : ''}` : activeWeapon;
             targetInfo.innerHTML = opts.length
                 ? `<span class="hint">Click a highlighted enemy to set ${label}'s target.</span>`
                 : `<span class="hint">${label} has no targets in range.</span>`;
@@ -780,10 +844,11 @@ function renderGunnery() {
         if (assigned.length) {
             targetInfo.innerHTML += `<div class="shot-list">${assigned.map(([widx, tid]) => {
                 const w = actor.weapons?.[widx];
-                const label = w ? `${w.name}${w.arc && w.arc !== 'AllArcs' ? ` (${w.arc})` : ''}` : widx;
+                const label = w ? `${w.name}${w.arc && w.arc !== 'AllArcs' ? ` (${w.arc}${w.broadArc ? ' + Broad Arc' : ''})` : ''}` : widx;
                 const t = state.ships.find(s => s.id === tid);
                 const opt = (weapons.get(widx) || []).find(o => o.targetShipId === tid);
-                const rangeStr = opt ? ` [${opt.range} hex${opt.range !== 1 ? 'es' : ''}${opt.rangePenalty ? `, ${opt.rangePenalty}` : ''}]` : '';
+                const penalties = opt ? [opt.rangePenalty && `${opt.rangePenalty} range`, opt.arcPenalty && `${opt.arcPenalty} arc`].filter(Boolean).join(', ') : '';
+                const rangeStr = opt ? ` [${opt.range} hex${opt.range !== 1 ? 'es' : ''}${penalties ? `, ${penalties}` : ''}]` : '';
                 const status = fired.has(widx) ? ' · fired' : '';
                 return `<span class="shot-item">${label} → ${t?.name ?? '?'}${rangeStr}${status}</span>`;
             }).join('')}</div>`;
@@ -805,7 +870,7 @@ function renderGunnery() {
             if (activeWeapon !== null && !selectedShots.has(idx)) {
                 const opts = weapons.get(idx) || [];
                 const eligible = opts.filter(o => !o.arcChoiceRequired || !selectedTargetArcs.has(o.targetShipId) ||
-                    o.arc === 'AllArcs' || o.arc === selectedTargetArcs.get(o.targetShipId));
+                    o.arc === 'AllArcs' || o.broadArc || o.arc === selectedTargetArcs.get(o.targetShipId));
                 if (eligible.length) assignGunneryTarget(idx, eligible.reduce((best, o) => o.range < best.range ? o : best).targetShipId);
             }
             actionPanel.querySelectorAll('.weapon-chip').forEach(c =>
@@ -860,7 +925,7 @@ function showWeaponRange(ship, weaponIndex) {
     const w = (ship.weapons || [])[weaponIndex];
     if (!w) return;
     const inc = w.rangeIncrement ?? 5;
-    const maxVis = inc * 3; // show up to 3 increments
+    const maxVis = Math.min(w.maxRange ?? inc * 10, inc * 3); // show up to 3 increments, capped at max range
     let perspective = ship;
     if (state?.phase === 'Helm' && pendingMove?.actorId === ship.id) {
         perspective = {
@@ -870,7 +935,7 @@ function showWeaponRange(ship, weaponIndex) {
             facing: pendingMove.option.finalFacing
         };
     }
-    grid.setRangeHexesOnly(rangeBandHexes(perspective, w.minRange ?? 1, maxVis, w.arc, inc));
+    grid.setRangeHexesOnly(rangeBandHexes(perspective, w.minRange ?? 1, maxVis, w.arc, inc, w.broadArc));
 }
 
 function clearWeaponRange() {
@@ -894,7 +959,7 @@ function showShipDetails(ship) {
         .map(({ w, i }) => `
         <div class="detail-weapon dw-hoverable" data-weapon-index="${i}">
             <span class="dw-name">${w.displayName || w.name}${w.linkedCount > 1 ? ` (${w.linkedCount} mounts)` : ''}</span>
-            <span class="dw-meta">${w.arc} · inc ${w.rangeIncrement ?? 5} · ${w.damage}${w.type ? ` · ${w.type}` : ''}${w.limitedFireUses > 0 ? ` · ${w.usesRemaining}/${w.limitedFireUses} shots` : ''}</span>
+            <span class="dw-meta">${w.arc}${w.broadArc ? ' + Broad Arc (−2 adjacent)' : ''} · range ${w.rangeIncrement ?? 5}/${w.maxRange ?? (w.rangeIncrement ?? 5) * 10} · ${w.damage}${w.type ? ` · ${w.type}` : ''}${w.limitedFireUses > 0 ? ` · ${w.usesRemaining}/${w.limitedFireUses} shots` : ''}</span>
         </div>`).join('');
 
     const systemsHtml = (ship.damagedSystems || []).length

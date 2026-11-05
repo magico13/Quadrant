@@ -4,6 +4,7 @@
   "type": "Direct-Fire",
   "minRange": 1,
   "rangeIncrement": 20,
+  "maxRange": 200,
   "damage": "8d4",
   "pcu": 20,
   "cost": 15,

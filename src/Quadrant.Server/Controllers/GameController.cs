@@ -38,7 +38,7 @@ public class GameController : ControllerBase
             ac = s.BaseAC,
             tl = s.BaseTL,
             shields = new { forward = s.Shields.Forward, starboard = s.Shields.Starboard, aft = s.Shields.Aft, port = s.Shields.Port },
-            weapons = s.Weapons.Select(w => new { name = w.Name, arc = w.Arc, damage = w.Damage.ToString(), type = w.Type, speed = w.ProjectileSpeed, limitedFireUses = w.LimitedFireUses })
+            weapons = s.Weapons.Select(w => new { name = w.Name, arc = w.Arc, broadArc = w.BroadArc, pointDefenseBonus = w.PointDefenseBonus, rangeIncrement = w.RangeIncrement, maxRange = w.MaxFireRange, damage = w.Damage.ToString(), type = w.Type, speed = w.ProjectileSpeed, limitedFireUses = w.LimitedFireUses })
         }));
     }
 
@@ -71,6 +71,10 @@ public class GameController : ControllerBase
 
         var state = session.State;
         var engine = session.Engine;
+        // Engine events are pending until a client fetches state. Fold them into
+        // the persisted battle history before clearing the transient queue.
+        state.BattleLog.AddRange(engine.LastEvents);
+        engine.LastEvents.Clear();
         foreach (var ship in state.Ships) { ship.InitializeWeaponUses(); ship.InitializeCrewRoles(); }
 
         // Phase-specific helper data for the client UI.
@@ -107,6 +111,10 @@ public class GameController : ControllerBase
                     weapons = engine.GetFreeAttackWeapons().Select(i => new { index = i, name = defender.Weapons[i].Name, arc = defender.Weapons[i].Arc }),
                     gunners = defender.CrewRoles.Select((role, i) => (role, i)).Where(x => x.role == "Gunner")
                         .Select(x => new { index = x.i, bonus = defender.CrewBonus(x.i, "gunnery", "Gunner") }) }
+                : null,
+            pendingPointDefense = engine.PendingPointDefense is { } pointDefense && state.GetShip(pointDefense.TargetShipId) is { } pointDefenseTarget
+                ? new { targetShipId = pointDefense.TargetShipId, targetName = state.DisplayName(pointDefenseTarget), arc = pointDefense.Arc,
+                    missiles = pointDefense.Missiles }
                 : null,
             firedWeaponIndices = engine.FiredWeaponIndices,
             winner = state.Winner,
@@ -174,11 +182,13 @@ public class GameController : ControllerBase
                         arc = w.Arc,
                         minRange = w.MinRange,
                         rangeIncrement = w.RangeIncrement,
-                        maxFireRange = w.MaxFireRange,
+                        maxRange = w.MaxFireRange,
                         damage = CombinedDamage(w.Damage, linkedCount).ToString(),
                         type = w.Type,
                         projectileSpeed = w.ProjectileSpeed,
                         limitedFireUses = w.LimitedFireUses,
+                        broadArc = w.BroadArc,
+                        pointDefenseBonus = w.PointDefenseBonus,
                         usesRemaining = s.WeaponUsesRemaining[i]
                     };
                 }),
@@ -186,11 +196,9 @@ public class GameController : ControllerBase
             }),
             projectiles = projectileViews,
             options,
-            // Return and clear pending events so the client only sees new ones.
-            log = engine.LastEvents.Select(e => new { phase = e.Phase, shipId = e.ShipId, message = e.Message }).ToList()
+            // Include the complete history so a reopened game shows what happened.
+            log = state.BattleLog.Select(e => new { phase = e.Phase, shipId = e.ShipId, message = e.Message }).ToList()
         });
-
-        engine.LastEvents.Clear();
         return result;
     }
 
@@ -345,6 +353,16 @@ public class GameController : ControllerBase
         return Ok(new { ok = true });
     }
 
+    [HttpPost("{roomCode}/point-defense")]
+    public IActionResult PointDefense(string roomCode, [FromBody] PointDefenseRequest req)
+    {
+        var session = _sessions.Get(roomCode);
+        if (session is null) return NotFound(new { error = "Game not found." });
+        var error = session.Engine.ResolvePointDefense(req.ProjectileId, req.Attempt);
+        if (error is not null) return BadRequest(new { error });
+        return Ok(new { ok = true });
+    }
+
     private static void AdvanceUnavailableGunneryTurns(CombatEngine engine)
     {
         while (engine.AutoEndGunneryTurnIfNoActions()) { }
@@ -375,5 +393,6 @@ public sealed record StuntRequest(string Stunt);
 public sealed record FreeAttackRequest(int? WeaponIndex, int? GunnerIndex);
 public sealed record TurnInPlaceRequest(int Facing);
 public sealed record FireShotRequest(int WeaponIndex, string TargetShipId, string? Arc = null);
+public sealed record PointDefenseRequest(string ProjectileId, bool Attempt);
 public sealed record RoleAssignmentsRequest(List<ShipRolesRequest> Ships);
 public sealed record ShipRolesRequest(string ShipId, List<string> Roles);

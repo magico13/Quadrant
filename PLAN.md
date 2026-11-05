@@ -15,8 +15,9 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 
 ## Current State
 - A playable hotseat combat loop is in place, with server-side rules, room codes, and a browser client.
-- The working tree contains uncommitted catalog and fleet setup work: ship and weapon JSON files, startup loading, a catalog API, and a UI for selecting ships for each team. This work has not yet been committed.
-- Seven ship definitions and a larger weapon catalog are present, including the Starhive Drone MK III, Hivonyx Titan Hauler, and Uie Hiveguard. Limited Fire and tracking projectiles are implemented; other weapon special tags remain catalog data.
+- The ship and weapon catalogs are loaded from JSON, with a catalog API and a UI for selecting each team's fleet.
+- Fifteen ship definitions are currently present. Limited Fire and tracking projectiles are implemented; remaining weapon property rules are tracked below.
+- Content support targets Starfinder Society safe options. Optional material from other books is out of scope unless explicitly added later.
 - Tracking projectiles now use catalog speed, acquire against TL, home each gunnery phase, and impact using normal shields/hull/critical rules.
 - Ship editing, per-player access and hidden information, and real-time synchronization remain future work. The architecture and v1 scope below describe targets, not all current implementation.
 
@@ -40,7 +41,7 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 - [ ] Implement crew actions, stunts, system damage effects and engineering repairs.
 - [ ] **Computer ICM bonuses.** Track each computer node's bonus and uses per round; prompt before an eligible starship combat check to apply one available node. Multiple nodes can affect separate checks, but bonuses cannot stack on one check.
 - [x] **Linked weapon batteries.** Group identical direct-fire mounts in the same arc; resolve each linked group as one gunnery action and check, with combined damage.
-- [ ] Implement remaining tracking weapon and special property rules using the relevant linked rules.
+- [ ] Implement remaining weapon property rules in the priority order below.
 - [ ] Playtest the completed hotseat combat loop; ship editing remains separate content work.
 
 ### Multiplayer
@@ -64,11 +65,13 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 - [ ] **Push actions.** Implement the chapter's push-action rules, including restrictions when the necessary system is malfunctioning or wrecked.
 
 ### Weapon Special Tags
-- [ ] **Wide arc at penalty.** Some weapons can fire outside their normal arc at a –4 penalty (e.g., turret-mounted weapons firing aft).
-- [ ] **Mining Laser "Burrowing."** If the Mining Laser hits, it burrows into the hull — next round it deals damage directly to hull ignoring shields.
+- [x] **Point.** Point weapons are capped at their first range increment. Tracking missiles are intercepted before damage; each eligible weapon checks once per round, automatically for a lone incoming missile, with a defend/pass choice when multiple missiles threaten the same arc.
+- [x] **Broad Arc.** Allow firing into either adjacent arc at a –2 penalty, reflected in hit chance and attack resolution.
+- [ ] **Array.** Fire at every target in one arc, with a –4 penalty on each gunnery check; roll damage once and apply it to each target. Allies in the arc are included. The weapon uses two mounts.
+- [ ] **Tractor Beam.** After a hit, allow holding, pushing, or pulling an eligible target during Helm; support the target pilot's escape check. A locked beam cannot fire normally.
+- [ ] **Irradiate (later).** Defer until crew damage is in scope; radiation damage to crew requires crew damage rules and should bypass shields/hull handling appropriately.
 - [x] **Tracking projectiles.** Initial attack uses TL and range penalty; each later gunnery phase checks TL again and moves by listed speed. Misses destroy the projectile; impacts deal normal damage.
 - [x] **Limited Fire.** Each mounted weapon with the property tracks its uses for the encounter; firing spends one use, and empty launchers cannot fire.
-- [ ] **Point-blank / close-range bonuses.** Some weapons get bonuses at very short range.
 
 ### Visual Polish (Flavor)
 - [ ] **Ship movement animation.** Ships glide from start to end hex over ~300ms instead of teleporting.
@@ -77,9 +80,9 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 - [ ] **Phase transition animations.** Brief overlay showing "HELM" / "GUNNERY" / "ENGINEERING" as phases change.
 
 ### Ship Data & Content
-- [ ] **More ships.** Add Tier 1 and Tier 3 ships from published sources.
+- [ ] **More ships.** Add SFS-safe Tier 1 and Tier 3 ships; defer optional material from other books.
 - [ ] **Ship editor UI.** Form to create/edit custom ships (hull, shields, weapons, etc.) persisted to SQLite.
-- [ ] **Weapon catalog.** Full list of Starfinder starship weapons with all special tags.
+- [ ] **Weapon catalog.** Expand the SFS-safe weapon catalog and implement properties according to the priority list above; defer optional material from other books.
 
 ## Concept
 A browser-playable Starfinder starship combat game for friends. Hex-grid tactical ship combat with the three-phase round loop (Engineering → Helm → Gunnery), AC/TL checks, quadrant shields, hull damage, and critical system failures.
@@ -178,19 +181,8 @@ Quadrant.sln
 └── PLAN.md
 ```
 
-## Original Ship Roster
-The original default ships are based on published Starfinder Society / Pact Worlds ships, all Tier 2. Additional ships are now available in `src/Quadrant.Server/ships/`.
-
-| Ship | Size | Speed | Maneuverability | Hull | CT | AC | TL | Shields (F/S/A/P) | Weapons |
-|------|------|-------|-----------------|------|----|----|----|--------------------|---------|
-| CompEnt AEV | Tiny | 8 | Perfect (0) | 20 | 4 | 15 | 12 | 3/2/3/2 | Mining Laser 2d6 (Fwd, inc 5) |
-| Pegasus | Medium | 10 | Good (1) | 55 | 11 | 12 | 12 | 10/10/10/10 | Light Laser 2d4 ×3 (Fwd/Port/Sb, inc 5), Coilgun 4d4 (AllArcs, inc 20) |
-| Gorgon | Large | 4 | Average (2) | 150 | 30 | 10 | 10 | 5/5/5/5 | Heavy Laser 4d8 (Fwd, inc 10) |
-
-Range increments per aonsrd.com: Short = 5 hexes, Medium = 10 hexes, Long = 20 hexes.
-
-Default hotseat: Team 0 = Pegasus + AEV, Team 1 = Gorgon; positions and team facings are randomized.
-No Damage Threshold on any ship (all "—" in published stats).
+## Ship Roster
+Ship definitions are maintained in `src/Quadrant.Server/ships/`. Keep additions within the SFS-safe content scope described above.
 
 ## Ship Data Model (Conceptual)
 ```json
