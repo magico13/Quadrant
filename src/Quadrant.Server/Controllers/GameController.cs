@@ -112,7 +112,7 @@ public class GameController : ControllerBase
             ships = state.Ships.Select(s => new
             {
                 id = s.InstanceId,
-                name = s.Name,
+                name = state.DisplayName(s),
                 tier = s.Definition.Tier,
                 size = s.Definition.Size,
                 teamId = s.TeamId,
@@ -129,6 +129,14 @@ public class GameController : ControllerBase
                 isDisabled = s.IsDisabled,
                 shields = new { forward = s.Shields.Forward, starboard = s.Shields.Starboard, aft = s.Shields.Aft, port = s.Shields.Port },
                 maxShield = s.Definition.Shields.Forward, // client uses this for arc opacity scaling
+                shieldCapacity = s.Definition.Shields.Forward + s.Definition.Shields.Starboard + s.Definition.Shields.Aft + s.Definition.Shields.Port,
+                shieldDivertMax = Math.Max(0, Math.Min(s.Definition.PowerCorePcu / 20,
+                    s.Definition.Shields.Forward + s.Definition.Shields.Starboard + s.Definition.Shields.Aft + s.Definition.Shields.Port -
+                    s.Shields.Forward - s.Shields.Starboard - s.Shields.Aft - s.Shields.Port)),
+                engineeringActionsUsed = s.EngineeringActionsUsed,
+                diverted = new { engines = s.DivertEngines, weapons = s.DivertWeapons, science = s.DivertScience },
+                heldSystem = s.Systems.HeldSystem,
+                systems = Enum.GetValues<ShipSystem>().Select(system => new { system, condition = s.Systems.Get(system), effectiveCondition = s.Systems.GetEffective(system) }),
                 crew = s.Definition.Crew.Select((c, i) =>
                 {
                     string role = s.CrewRoles[i];
@@ -140,7 +148,7 @@ public class GameController : ControllerBase
                         "Science Officer" => "computers",
                         _ => null
                     };
-                    return new { primaryRole = c.Role, role, ranks = c.Ranks, skills = c.Skills,
+                    return new { primaryRole = c.Role, role, ranks = c.Ranks, skills = c.Skills, actionUsed = s.CrewActionsUsed.Contains(i),
                         roleBonus = skill is null ? (int?)null : s.CrewBonus(i, skill, role) };
                 }),
                 helmAction = s.Definition.Crew.Count == 0 || s.CrewRoles.Contains("Pilot") ? "Pilot" : s.AvailableMinorCrew() >= 0 ? "Glide" : "None",
@@ -180,6 +188,16 @@ public class GameController : ControllerBase
             return BadRequest(new { error = "Invalid role assignments." });
         var assignments = req.Ships.ToDictionary(s => s.ShipId, s => (IReadOnlyList<string>)s.Roles);
         var error = session.Engine.AssignRoles(assignments);
+        return error is null ? Ok(new { ok = true }) : BadRequest(new { error });
+    }
+
+    /// <summary>Advances out of the Engineering phase into Helm.</summary>
+    [HttpPost("{roomCode}/engineering")]
+    public IActionResult Engineering(string roomCode, [FromBody] EngineerAction action)
+    {
+        var session = _sessions.Get(roomCode);
+        if (session is null) return NotFound(new { error = "Game not found." });
+        var error = session.Engine.ApplyEngineering(action);
         return error is null ? Ok(new { ok = true }) : BadRequest(new { error });
     }
 

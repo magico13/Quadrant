@@ -5,6 +5,32 @@ namespace Quadrant.RulesEngine.Tests;
 
 public class SessionPersistenceTests
 {
+    [Fact]
+    public void EngineeringEffectsAndUsedActionsSurviveRestart()
+    {
+        string db = Path.Combine(Path.GetTempPath(), $"quadrant-{Guid.NewGuid():N}.db");
+        try
+        {
+            var def = new ShipDefinition { Id = "ship", Name = "Ship", Tier = 2, Shields = new QuadrantShields(),
+                Crew = [new CrewDefinition("Engineer", new Dictionary<string, int> { ["engineering"] = 20 }, 2),
+                        new CrewDefinition("Engineer", new Dictionary<string, int> { ["engineering"] = 20 }, 2)] };
+            var manager = new SessionManager(db, diceFactory: () => new FixedDice());
+            var session = manager.Create("game", [def.Instantiate("a", new Hex(0, 0), Facing.East, 0)]);
+            session.State.Phase = CombatPhase.Engineering;
+            var ship = session.State.Ships[0];
+            ship.Systems.ApplyCritical(ShipSystem.Engines);
+            Assert.Null(session.Engine.ApplyEngineering(new EngineerAction("a", 0, "Divert", "Weapons", null)));
+            Assert.Null(session.Engine.ApplyEngineering(new EngineerAction("a", 1, "Hold It Together", "Engines", null)));
+            manager.Save(session, true);
+            var restored = new SessionManager(db).Get(session.RoomCode)!.State.Ships[0];
+            Assert.True(restored.DivertWeapons);
+            Assert.Equal(ShipSystem.Engines, restored.Systems.HeldSystem);
+            Assert.Equal(SystemCondition.None, restored.Systems.GetEffective(ShipSystem.Engines));
+            Assert.Contains("Divert", restored.EngineeringActionsUsed);
+            Assert.Equal(2, restored.CrewActionsUsed.Count);
+        }
+        finally { if (File.Exists(db)) File.Delete(db); }
+    }
     private sealed class Clock(DateTimeOffset now) : TimeProvider
     {
         public DateTimeOffset Now { get; set; } = now;

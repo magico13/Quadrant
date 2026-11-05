@@ -5,6 +5,22 @@ namespace Quadrant.RulesEngine.Tests;
 
 public class TeamSetupTests
 {
+    [Fact]
+    public void DuplicateDisplayNamesRemainStableAcrossTeamsAndDestruction()
+    {
+        var definition = new ShipDefinition { Id = "ship", Name = "Ship", Shields = new QuadrantShields() };
+        var other = new ShipDefinition { Id = "other", Name = "Other", Shields = new QuadrantShields() };
+        var state = new GameState { GameId = "test", RoomCode = "test" };
+        var first = definition.Instantiate("a", new Hex(0, 0), Facing.East, 0);
+        var second = definition.Instantiate("b", new Hex(1, 0), Facing.West, 1);
+        var unique = other.Instantiate("c", new Hex(2, 0), Facing.West, 1);
+        state.Ships.AddRange([first, second, unique]);
+        Assert.Equal("Ship #1", state.DisplayName(first));
+        Assert.Equal("Ship #2", state.DisplayName(second));
+        Assert.Equal("Other", state.DisplayName(unique));
+        first.IsDestroyed = true;
+        Assert.Equal("Ship #2", state.DisplayName(second));
+    }
     [Theory]
     [InlineData(14, 3, 0)]
     [InlineData(13, 1, 0)]

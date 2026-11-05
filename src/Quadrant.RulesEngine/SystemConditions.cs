@@ -35,10 +35,14 @@ public sealed class SystemConditions
 {
     private readonly Dictionary<ShipSystem, SystemCondition> _conditions = new();
     public Dictionary<ShipSystem, SystemCondition> PersistedConditions => _conditions;
+    public ShipSystem? HeldSystem { get; set; }
 
     /// <summary>Gets the current condition of a system (None if undamaged).</summary>
     public SystemCondition Get(ShipSystem system)
         => _conditions.TryGetValue(system, out var cond) ? cond : SystemCondition.None;
+
+    public SystemCondition GetEffective(ShipSystem system)
+        => HeldSystem == system ? (SystemCondition)Math.Max(0, (int)Get(system) - 2) : Get(system);
 
     /// <summary>
     /// Applies critical damage to a system, escalating its condition by one step.
@@ -67,7 +71,7 @@ public sealed class SystemConditions
     /// Gets the penalty this system's condition imposes on crew actions.
     /// Glitching: -2, Malfunctioning: -4, Wrecked: auto-fail (represented as int.MinValue).
     /// </summary>
-    public int GetActionPenalty(ShipSystem system) => Get(system) switch
+    public int GetActionPenalty(ShipSystem system) => GetEffective(system) switch
     {
         SystemCondition.None => 0,
         SystemCondition.Glitching => -2,
@@ -80,7 +84,7 @@ public sealed class SystemConditions
     /// Gets the global penalty from a malfunctioning/wrecked power core, which
     /// affects ALL crew actions (not just engineer actions).
     /// </summary>
-    public int PowerCoreGlobalPenalty => Get(ShipSystem.PowerCore) switch
+    public int PowerCoreGlobalPenalty => GetEffective(ShipSystem.PowerCore) switch
     {
         SystemCondition.Malfunctioning => -2,
         SystemCondition.Wrecked => -4,

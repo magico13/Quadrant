@@ -74,6 +74,14 @@ public sealed class GameState
     public ShipInstance? GetShip(string instanceId)
         => Ships.FirstOrDefault(s => s.InstanceId == instanceId);
 
+    /// <summary>Names duplicate ships consistently for the whole game.</summary>
+    public string DisplayName(ShipInstance ship)
+    {
+        var matching = Ships.Where(s => s.Name == ship.Name).ToList();
+        int index = matching.FindIndex(s => s.InstanceId == ship.InstanceId);
+        return matching.Count > 1 && index >= 0 ? $"{ship.Name} #{index + 1}" : ship.Name;
+    }
+
     /// <summary>The ship currently acting (if any).</summary>
     [JsonIgnore]
     public ShipInstance? CurrentActor

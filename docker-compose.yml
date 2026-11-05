@@ -1,14 +1,10 @@
 services:
   server:
-    build: .
+    image: ghcr.io/magico13/quadrant:latest
     container_name: quadrant-server
     ports:
       - "5180:5180"
-    environment:
-      - ASPNETCORE_ENVIRONMENT=Development
     volumes:
-      # Live UI: edits to wwwroot are picked up on browser refresh, no rebuild.
-      - ./src/Quadrant.Server/wwwroot:/app/wwwroot:ro
       - quadrant-data:/app/data
     restart: unless-stopped
 

@@ -61,7 +61,12 @@ public sealed class ShipInstance
 
     public string Name => Definition.Name;
     public int MaxHullPoints => Definition.HullPoints;
-    public int Speed => Definition.Speed;
+    public bool DivertEngines { get; set; }
+    public bool DivertWeapons { get; set; }
+    public bool DivertScience { get; set; }
+    public HashSet<string> EngineeringActionsUsed { get; } = [];
+    public int Speed => Definition.Speed + (DivertEngines ? 2 : 0);
+    public int SpeedPilotingAdjustment => ShipDefinition.PilotingModifierForSpeed(Speed) - Definition.SpeedPilotingModifier;
     public Maneuverability Maneuverability => Definition.Maneuverability;
     [JsonIgnore]
     public IReadOnlyList<Weapon> Weapons => Definition.Weapons;
@@ -234,6 +239,9 @@ public sealed class ShipInstance
         CrewActionsUsed.Clear();
         CrewMinorActionsUsed.Clear();
         GunnerActionTaken = false;
+        DivertEngines = DivertWeapons = DivertScience = false;
+        EngineeringActionsUsed.Clear();
+        Systems.HeldSystem = null;
         RoundAcTlModifier = 0;
         TurnedInPlaceThisRound = false;
     }

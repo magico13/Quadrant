@@ -3,16 +3,28 @@ namespace Quadrant.RulesEngine.Tests;
 public class MovementPathTests
 {
     [Fact]
+    public void PerfectManeuverabilityCannotTurnBeforeMovingEvenWithDivertedEngines()
+    {
+        var def = new ShipDefinition { Id = "perfect", Name = "Perfect", Speed = 4,
+            Maneuverability = Maneuverability.Perfect, HullPoints = 100, Shields = new QuadrantShields() };
+        var ship = def.Instantiate("ship", new Hex(0, 0), Facing.East, 0);
+        ship.DivertEngines = true;
+        var engine = MakeHelmEngine(ship);
+        Assert.All(engine.GetValidMoves(), move => {
+            if (move.Path.Count > 1) Assert.NotEqual(move.Path[0].Position, move.Path[1].Position);
+        });
+    }
+    [Fact]
     public void RoutePrefersLongerPathThatAvoidsEnemyHex()
     {
-        var definition = new ShipDefinition { Id = "mover", Name = "Mover", Speed = 4, Maneuverability = Maneuverability.Perfect,
+        var definition = new ShipDefinition { Id = "mover", Name = "Mover", Speed = 5, Maneuverability = Maneuverability.Perfect,
             HullPoints = 100, Shields = new QuadrantShields() };
         var mover = definition.Instantiate("mover", new Hex(0, 0), Facing.East, 0);
-        var enemy = definition.Instantiate("enemy", new Hex(1, 0), Facing.West, 1);
+        var enemy = definition.Instantiate("enemy", new Hex(2, 0), Facing.West, 1);
         var engine = MakeHelmEngine(mover, enemy);
-        var option = Assert.Single(engine.GetValidMoves(), m => m.Position == new Hex(2, 0) && m.FinalFacing == Facing.East);
+        var option = Assert.Single(engine.GetValidMoves(), m => m.Position == new Hex(3, 0) && m.FinalFacing == Facing.East);
         Assert.DoesNotContain(option.Path, step => step.Position == enemy.Position);
-        Assert.True(option.Path.Zip(option.Path.Skip(1)).Count(pair => pair.First.Position != pair.Second.Position) > 2);
+        Assert.True(option.Path.Zip(option.Path.Skip(1)).Count(pair => pair.First.Position != pair.Second.Position) > 3);
     }
 
     [Fact]

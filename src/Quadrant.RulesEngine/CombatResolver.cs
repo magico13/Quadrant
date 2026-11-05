@@ -24,8 +24,12 @@ public sealed record AttackCheckResult(
     bool IsHit, int Roll, int Modifier, int CheckTotal, int DefenseValue,
     string DefenseName, int DamageRolled, string Description);
 
+public sealed record CriticalDamageEffect(ShipSystem System, SystemCondition Condition);
 public sealed record DamageResolution(int ShieldDamage, int HullDamage, bool CriticalScored,
-    ShipSystem? CriticalSystem, SystemCondition? NewCriticalCondition, string Description);
+    ShipSystem? CriticalSystem, SystemCondition? NewCriticalCondition, string Description)
+{
+    public IReadOnlyList<CriticalDamageEffect> CriticalEffects { get; init; } = [];
+}
 
 /// <summary>
 /// Resolves attacks and applies damage during the Gunnery phase. This is where
@@ -34,14 +38,13 @@ public sealed record DamageResolution(int ShieldDamage, int HullDamage, bool Cri
 /// </summary>
 public static class CombatResolver
 {
-    public static AttackResult ResolveProjectileImpact(TrackingProjectile projectile, ShipInstance target, IDiceRoller dice, int roll, int checkBonus, int defenseValue, Hex impactFrom)
+    public static AttackResult ResolveProjectileImpact(TrackingProjectile projectile, ShipInstance target, IDiceRoller dice, int roll, int checkBonus, int defenseValue, Hex impactFrom, bool divertWeapons = false)
     {
-        int rawDamage = projectile.Weapon.Damage.Roll(dice);
+        int rawDamage = projectile.Weapon.Damage.Roll(dice, divertWeapons);
         Quadrant quadrant = target.QuadrantOf(impactFrom);
         var damage = ApplyDamage(target, quadrant, rawDamage, roll, dice);
         int total = roll + checkBonus;
-        string desc = $"Tracking check {FormatCheck(roll, checkBonus, total)} vs TL {defenseValue} — IMPACT! {rawDamage} dmg ({damage.ShieldDamage} shield, {damage.HullDamage} hull).";
-        if (damage.CriticalScored) desc += $" CRITICAL: {damage.CriticalSystem} → {damage.NewCriticalCondition}!";
+        string desc = $"Tracking check {FormatCheck(roll, checkBonus, total)} vs TL {defenseValue} — IMPACT! {damage.Description}.";
         return AttackResult.Success(total, rawDamage, damage.ShieldDamage, damage.HullDamage,
             damage.CriticalScored, damage.CriticalSystem, damage.NewCriticalCondition, desc);
     }
@@ -86,24 +89,24 @@ public static class CombatResolver
         else if (target.HullPoints <= 0) target.IsDisabled = true;
 
         int ct = target.Definition.CriticalThreshold;
-        bool thresholdCrossed = false;
+        int thresholdCrossings = 0;
         if (ct > 0 && hullDamage > 0)
         {
             int prior = Math.Max(0, target.TotalHullDamageTaken - hullDamage - 1) / ct;
             int current = Math.Max(0, target.TotalHullDamageTaken - 1) / ct;
-            thresholdCrossed = current > prior;
+            thresholdCrossings = current - prior;
         }
-        bool critical = hullDamage > 0 && (attackRoll == 20 || thresholdCrossed);
-        ShipSystem? system = null;
-        SystemCondition? condition = null;
-        if (critical)
+        int criticalCount = hullDamage > 0 ? thresholdCrossings + (attackRoll == 20 ? 1 : 0) : 0;
+        var effects = new List<CriticalDamageEffect>();
+        for (int i = 0; i < criticalCount; i++)
         {
-            system = SystemFromPercent(dice.RollPercent(), target);
-            condition = target.Systems.ApplyCritical(system.Value);
+            var system = SystemFromPercent(dice.RollPercent(), target);
+            effects.Add(new CriticalDamageEffect(system, target.Systems.ApplyCritical(system)));
         }
         string description = $"{rawDamage} dmg ({shieldDamage} shield, {hullDamage} hull)";
-        if (critical) description += $". CRITICAL: {system} → {condition}!";
-        return new DamageResolution(shieldDamage, hullDamage, critical, system, condition, description);
+        foreach (var effect in effects) description += $". CRITICAL: {effect.System} → {effect.Condition}!";
+        return new DamageResolution(shieldDamage, hullDamage, effects.Count > 0, effects.FirstOrDefault()?.System,
+            effects.FirstOrDefault()?.Condition, description) { CriticalEffects = effects };
     }
 
     public static string FormatCheck(int roll, int modifier, int total)

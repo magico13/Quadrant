@@ -81,7 +81,9 @@ public sealed record ShipDefinition
     public int BaseTL { get; init; } = 12;
 
     /// <summary>Piloting check modifier based on speed.</summary>
-    public int SpeedPilotingModifier => Speed switch
+    public int SpeedPilotingModifier => PilotingModifierForSpeed(Speed);
+
+    public static int PilotingModifierForSpeed(int speed) => speed switch
     {
         <= 4 => 2,
         6 => 1,

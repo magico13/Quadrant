@@ -12,6 +12,8 @@ public sealed record PendingHitSnapshot(string AttackerId, string TargetId, Weap
 public sealed record PendingLaunchSnapshot(TrackingProjectile Projectile, AttackCheckResult Check);
 public sealed record FiredWeaponSnapshot(string ShipId, int WeaponIndex);
 public sealed record TargetArcSnapshot(string ShipId, string TargetId, FiringArc Arc);
+public sealed record ShieldAllocation(int Forward, int Starboard, int Aft, int Port);
+public sealed record EngineerAction(string ShipId, int CrewIndex, string Action, string Target, ShieldAllocation? Shields);
 public sealed record CombatEngineSnapshot(
     List<PendingHitSnapshot> PendingHits, List<PendingLaunchSnapshot> PendingLaunches,
     List<FiredWeaponSnapshot> FiredWeapons, List<TargetArcSnapshot> TargetArcs,
@@ -74,10 +76,13 @@ public sealed class CombatEngine
             string description = $"{ShipLogName(defender)} fires {weapon.Name} at {ShipLogName(target)} as a free attack: Gunnery {CombatResolver.FormatCheck(roll, bonus, total)} vs AC {target.CurrentAC} — {(hit ? "HIT" : "MISS")}.";
             if (hit)
             {
+                bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
                 var damage = CombatResolver.ApplyDamage(target, Quadrant.Aft, weapon.Damage.Roll(_dice), roll, _dice);
                 description += $" {damage.Description}.";
+                LastEvents.Add(new CombatEvent("Helm", defender.InstanceId, description));
+                LogShipStatusChange(target, wasDisabled, wasDestroyed, "Helm");
             }
-            LastEvents.Add(new CombatEvent("Helm", defender.InstanceId, description));
+            else LastEvents.Add(new CombatEvent("Helm", defender.InstanceId, description));
         }
         FreeAttackShipId = null;
         ContinueCommittedMove();
@@ -228,10 +233,12 @@ public sealed class CombatEngine
                 _pendingLaunches.Clear();
                 foreach (var (attacker, target, weapon, check, quadrant) in _pendingHits)
                 {
-                    int rolledDamage = weapon.Damage.Roll(_dice);
+                    int rolledDamage = weapon.Damage.Roll(_dice, attacker.DivertWeapons);
+                    bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
                     var damage = CombatResolver.ApplyDamage(target, quadrant, rolledDamage, check.Roll, _dice);
                     LastEvents.Add(new CombatEvent("Gunnery", attacker.InstanceId,
                         $"{ShipLogName(target)} takes damage from {ShipLogName(attacker)}'s {weapon.Name}: {damage.Description}."));
+                    LogShipStatusChange(target, wasDisabled, wasDestroyed, "Gunnery");
                 }
                 _pendingHits.Clear();
                 _firedWeapons.Clear();
@@ -307,11 +314,12 @@ public sealed class CombatEngine
                       + (pilot >= 0 ? 0 : ship.Definition.SpeedPilotingModifier
                       + ship.Definition.ManeuverabilityPilotingModifier
                       )
+                      + ship.SpeedPilotingAdjustment
                       + ship.Systems.GetActionPenalty(ShipSystem.Engines)
                       + ship.Systems.PowerCoreGlobalPenalty;
 
             // If engines are wrecked, the pilot can't act (auto-fail → treat as 0).
-            if (ship.Systems.Get(ShipSystem.Engines) == SystemCondition.Wrecked)
+            if (ship.Systems.GetEffective(ShipSystem.Engines) == SystemCondition.Wrecked)
                 roll = 0;
             else
                 roll += bonus;
@@ -350,6 +358,8 @@ public sealed class CombatEngine
         int pilot = ship.CrewRoles.IndexOf("Pilot");
         if (ship.Definition.Crew.Count > 0 && pilot < 0)
             return MoveValidationResult.Fail("Use a Glide movement when no pilot is assigned.");
+        if (ship.Systems.GetEffective(ShipSystem.Engines) == SystemCondition.Wrecked)
+            return MoveValidationResult.Fail("The engines are wrecked; pilot actions automatically fail.");
 
         var result = MovementValidator.Validate(ship, action, _state);
         if (!result.IsValid)
@@ -396,6 +406,8 @@ public sealed class CombatEngine
         ship.InitializeCrewRoles();
         if (ship.Definition.Crew.Count > 0 && !ship.CrewRoles.Contains("Pilot"))
             return MoveValidationResult.Fail("Turning in place requires a pilot; Glide cannot perform stunts.");
+        if (ship.Systems.GetEffective(ShipSystem.Engines) is SystemCondition.Malfunctioning or SystemCondition.Wrecked)
+            return MoveValidationResult.Fail("Turning in place is a push action and requires working engines.");
 
         // Turning to the direction already faced is a no-op: no stunt, no penalty.
         if (facing == ship.Facing)
@@ -576,7 +588,7 @@ public sealed class CombatEngine
         ship.InitializeCrewRoles();
         int pilot = ship.CrewRoles.IndexOf("Pilot");
         if (pilot < 0 || ship.CrewActionsUsed.Contains(pilot)) return MoveValidationResult.Fail("The stunt requires an available pilot.");
-        if (ship.Systems.Get(ShipSystem.Engines) is SystemCondition.Malfunctioning or SystemCondition.Wrecked)
+        if (ship.Systems.GetEffective(ShipSystem.Engines) is SystemCondition.Malfunctioning or SystemCondition.Wrecked)
             return MoveValidationResult.Fail("Stunts are push actions and require working engines.");
         if (stunt == "Back Off")
         {
@@ -588,7 +600,7 @@ public sealed class CombatEngine
 
         int penalty = ship.Systems.GetActionPenalty(ShipSystem.Engines);
         int roll = _dice.RollD20();
-        int bonus = ship.CrewBonus(pilot, "piloting", "Pilot") + (penalty == int.MinValue ? 0 : penalty) + ship.Systems.PowerCoreGlobalPenalty;
+        int bonus = ship.CrewBonus(pilot, "piloting", "Pilot") + ship.SpeedPilotingAdjustment + (penalty == int.MinValue ? 0 : penalty) + ship.Systems.PowerCoreGlobalPenalty;
         int dc = (int)Math.Floor((stunt == "Back Off" ? 10 : 15) + 1.5 * ship.Definition.Tier);
         int total = roll + bonus;
         bool failedByFive = penalty == int.MinValue || total <= dc - 5;
@@ -624,8 +636,72 @@ public sealed class CombatEngine
     }
 
     // ────────────────────────────────────────────────
-    //  Engineering phase (v1: simple repair or skip)
+    //  Engineering phase
     // ────────────────────────────────────────────────
+
+    /// <summary>Attempt one engineering action, consuming that engineer's action even on failure.</summary>
+    public string? ApplyEngineering(EngineerAction action)
+    {
+        if (_state.Phase != CombatPhase.Engineering) return "Engineering actions are only available during Engineering.";
+        var ship = _state.GetShip(action.ShipId);
+        if (ship is null || ship.IsDestroyed || ship.IsDisabled) return "This ship cannot take engineering actions.";
+        ship.InitializeCrewRoles();
+        if (action.CrewIndex < 0 || action.CrewIndex >= ship.CrewRoles.Count || ship.CrewRoles[action.CrewIndex] != "Engineer" || ship.CrewActionsUsed.Contains(action.CrewIndex))
+            return "Select an engineer who has not acted this round.";
+        if (action.Action is not ("Divert" or "Hold It Together")) return "Unknown engineering action.";
+        if (ship.EngineeringActionsUsed.Contains(action.Action)) return $"{action.Action} has already been attempted this round.";
+
+        ShipSystem heldSystem = default;
+        if (action.Action == "Hold It Together" && (!Enum.TryParse(action.Target, true, out heldSystem) || !Enum.IsDefined(heldSystem)))
+            return "Select a valid system to hold together.";
+        if (action.Action == "Divert" && action.Target is not ("Engines" or "Science" or "Weapons" or "Shields"))
+            return "Select a valid system for Divert.";
+        if (action.Action == "Divert" && action.Target == "Shields")
+        {
+            var a = action.Shields;
+            int max = ship.Definition.Shields.Forward + ship.Definition.Shields.Starboard + ship.Definition.Shields.Aft + ship.Definition.Shields.Port;
+            int current = ship.Shields.Forward + ship.Shields.Starboard + ship.Shields.Aft + ship.Shields.Port;
+            int restore = Math.Max(0, Math.Min(ship.Definition.PowerCorePcu / 20, max - current));
+            if (a is null || a.Forward < 0 || a.Starboard < 0 || a.Aft < 0 || a.Port < 0 ||
+                (long)a.Forward + a.Starboard + a.Aft + a.Port != restore)
+                return $"Distribute exactly {restore} shield points across the four quadrants.";
+        }
+
+        ship.CrewActionsUsed.Add(action.CrewIndex);
+        ship.EngineeringActionsUsed.Add(action.Action);
+        int penalty = action.Action == "Hold It Together" ? 0 : ship.Systems.GetActionPenalty(ShipSystem.PowerCore);
+        if (penalty == int.MinValue)
+        {
+            LastEvents.Add(new CombatEvent("Engineering", ship.InstanceId, $"{ShipLogName(ship)} attempts {action.Action}: power core wrecked — automatic failure."));
+            return null;
+        }
+        int bonus = ship.CrewBonus(action.CrewIndex, "engineering", "Engineer") + penalty;
+        int roll = _dice.RollD20();
+        int total = roll + bonus;
+        int dc = (int)Math.Floor((action.Action == "Divert" ? 10 : 15) + 1.5 * ship.Definition.Tier);
+        bool success = total >= dc;
+        if (success && action.Action == "Hold It Together") ship.Systems.HeldSystem = heldSystem;
+        if (success && action.Action == "Divert")
+        {
+            switch (action.Target)
+            {
+                case "Engines": ship.DivertEngines = true; break;
+                case "Weapons": ship.DivertWeapons = true; break;
+                case "Science": ship.DivertScience = true; break;
+                case "Shields":
+                    var a = action.Shields!;
+                    int max = ship.Definition.Shields.Forward + ship.Definition.Shields.Starboard + ship.Definition.Shields.Aft + ship.Definition.Shields.Port;
+                    ship.Shields.Restore(Quadrant.Forward, a.Forward, max);
+                    ship.Shields.Restore(Quadrant.Starboard, a.Starboard, max);
+                    ship.Shields.Restore(Quadrant.Aft, a.Aft, max);
+                    ship.Shields.Restore(Quadrant.Port, a.Port, max);
+                    break;
+            }
+        }
+        LastEvents.Add(new CombatEvent("Engineering", ship.InstanceId,
+            $"{ShipLogName(ship)} attempts {action.Action} ({action.Target}): {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(success ? "SUCCESS" : "FAIL")}.") );
+        return null;
+    }
 
     /// <summary>
     /// Advances out of the Engineering phase once all ships have acted (or chosen to skip).
@@ -660,6 +736,7 @@ public sealed class CombatEngine
         ship.InitializeCrewRoles();
         bool glide = requestedShip is null && ship.Definition.Crew.Count > 0 && !ship.CrewRoles.Contains("Pilot");
         if (glide && ship.AvailableMinorCrew() < 0) return new();
+        if (requestedShip is null && !glide && ship.Systems.GetEffective(ShipSystem.Engines) == SystemCondition.Wrecked) return new();
         int speed = glide ? ship.Speed / 2 : ship.Speed;
         int minBetweenTurns = ship.Definition.DistanceBetweenTurns + (glide ? 2 : 0);
         var occupied = new HashSet<Hex>(_state.Ships
@@ -694,7 +771,7 @@ public sealed class CombatEngine
             if (current.Remaining > 0)
                 Visit((current.Pos.Neighbor((int)current.Facing), current.Facing, current.Remaining - 1,
                     Math.Min(minBetweenTurns, current.SinceTurn + 1), 0), true);
-            if (current.Turns < maxConsecutiveTurns && (minBetweenTurns == 0 || current.SinceTurn >= minBetweenTurns))
+            if (current.Remaining < speed && current.Turns < maxConsecutiveTurns && (minBetweenTurns == 0 || current.SinceTurn >= minBetweenTurns))
                 foreach (int delta in new[] { 1, -1 })
                     Visit((current.Pos, (Facing)(((int)current.Facing + delta + 6) % 6), current.Remaining, 0, current.Turns + 1), false);
         }
@@ -739,7 +816,9 @@ public sealed class CombatEngine
         var projectileShip = definition.Instantiate(projectile.Id, projectile.Position, projectile.Facing, projectile.TeamId);
         var routes = _ComputeReachable(projectileShip, target.Position);
         var route = routes
+            .Where(kv => kv.Value.Any(step => step.Position != projectile.Position))
             .OrderBy(kv => kv.Key.Pos.DistanceTo(target.Position))
+            .ThenByDescending(kv => kv.Value.Zip(kv.Value.Skip(1)).Count(pair => pair.First.Position != pair.Second.Position))
             .ThenBy(kv => kv.Value.Count)
             .Select(kv => kv.Value)
             .FirstOrDefault();
@@ -859,12 +938,14 @@ public sealed class CombatEngine
     // ────────────────────────────────────────────────
 
     private string ShipLogName(ShipInstance ship)
+        => $"{_state.DisplayName(ship)} (Team {ship.TeamId + 1})";
+
+    private void LogShipStatusChange(ShipInstance ship, bool wasDisabled, bool wasDestroyed, string phase)
     {
-        var sameName = _state.Ships.Where(s => s.Name == ship.Name).ToList();
-        string numberedName = sameName.Count > 1
-            ? $"{ship.Name} #{sameName.FindIndex(s => s.InstanceId == ship.InstanceId) + 1}"
-            : ship.Name;
-        return $"{numberedName} (Team {ship.TeamId + 1})";
+        if (!wasDestroyed && ship.IsDestroyed)
+            LastEvents.Add(new CombatEvent(phase, ship.InstanceId, $"{ShipLogName(ship)} is destroyed!"));
+        else if (!wasDisabled && ship.IsDisabled)
+            LastEvents.Add(new CombatEvent(phase, ship.InstanceId, $"{ShipLogName(ship)} is disabled!"));
     }
 
     private string ProjectileLogName(TrackingProjectile projectile)
@@ -909,10 +990,13 @@ public sealed class CombatEngine
 
         if (projectile.Position == target.Position)
         {
-            var result = CombatResolver.ResolveProjectileImpact(projectile, target, _dice, roll, checkBonus, defense, impactFrom);
+            bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
+            var result = CombatResolver.ResolveProjectileImpact(projectile, target, _dice, roll, checkBonus, defense, impactFrom,
+                _state.GetShip(projectile.OwnerShipId)?.DivertWeapons == true);
             string ownerName = _state.GetShip(projectile.OwnerShipId) is { } owner ? ShipLogName(owner) : $"Team {projectile.TeamId + 1}";
             LastEvents.Add(new CombatEvent("Gunnery", projectile.OwnerShipId,
                 $"{ownerName}'s {ProjectileLogName(projectile)} hits {ShipLogName(target)}: {result.Description}"));
+            LogShipStatusChange(target, wasDisabled, wasDestroyed, "Gunnery");
             _state.Projectiles.Remove(projectile);
         }
         else

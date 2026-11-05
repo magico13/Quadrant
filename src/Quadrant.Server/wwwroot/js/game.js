@@ -296,6 +296,7 @@ function renderRoles() {
     actionPanel.innerHTML = `
         <div class="actor-name">Crew Roles</div>
         <div class="hint">Choose roles for this round. Previous assignments are kept until changed.</div>
+        <div class="crew-roles-list">
         ${active.map(ship => `<div class="detail-section" style="color:${teamColor(ship.teamId)}">${ship.name} (Team ${ship.teamId + 1})</div>
             ${(ship.crew || []).map((crew, index) => `<div class="eng-row">
                 <label for="role-${ship.id}-${index}">${crew.primaryRole} ${index + 1} · ${crew.ranks} ranks</label>
@@ -303,6 +304,7 @@ function renderRoles() {
                     ${roles.map(role => `<option value="${role}" ${crew.role === role ? 'selected' : ''}>${role}</option>`).join('')}
                 </select>
             </div>`).join('') || '<div class="hint">No crew recorded.</div>'}`).join('')}
+        </div>
         <div id="roles-error" class="hint"></div>
         <button class="btn btn-primary" id="btn-confirm-roles">Confirm Roles</button>`;
     document.getElementById('btn-confirm-roles').addEventListener('click', async () => {
@@ -319,10 +321,44 @@ function renderRoles() {
 function renderEngineering() {
     grid.setHighlights([]);
     grid.setTargets([]);
+    const ships = state.ships.filter(s => !s.isDestroyed && !s.isDisabled);
     actionPanel.innerHTML = `
         <div class="actor-name">Engineering</div>
-        <div class="hint">Engineer actions are not yet available.</div>
+        <div class="hint">Each engineer can take one action. Divert and Hold It Together can each be attempted once per ship this round.</div>
+        ${ships.map(ship => {
+            const engineers = (ship.crew || []).map((crew, i) => ({ ...crew, i })).filter(c => c.role === 'Engineer' && !c.actionUsed);
+            const used = new Set(ship.engineeringActionsUsed || []);
+            const options = [];
+            if (!used.has('Divert')) for (const target of ['Engines', 'Science', 'Weapons', 'Shields'])
+                options.push(`<option value="Divert|${target}">Divert — ${target}</option>`);
+            if (!used.has('Hold It Together')) for (const system of ship.systems || [])
+                options.push(`<option value="Hold It Together|${system.system}">Hold It Together — ${system.system} (${system.condition})</option>`);
+            return `<div class="detail-section" style="color:${teamColor(ship.teamId)}">${ship.name} (Team ${ship.teamId + 1})</div>
+                ${engineers.length && options.length ? `<div class="eng-row"><label>Engineer</label><select id="engineer-${ship.id}">${engineers.map(c => `<option value="${c.i}">${c.primaryRole} ${c.i + 1} (${c.roleBonus >= 0 ? '+' : ''}${c.roleBonus})</option>`).join('')}</select></div>
+                <div class="eng-row"><label>Action</label><select id="engineering-action-${ship.id}">${options.join('')}</select></div>
+                <div id="shield-allocation-${ship.id}" hidden><div class="hint">Distribute ${ship.shieldDivertMax} shield points (total capacity ${ship.shieldCapacity}).</div>
+                ${['forward', 'starboard', 'aft', 'port'].map(q => `<div class="eng-row"><label>${q[0].toUpperCase() + q.slice(1)} (${ship.shields[q]} current)</label><input type="number" id="shield-${ship.id}-${q}" min="0" max="${ship.shieldDivertMax}" value="0"></div>`).join('')}</div>
+                <button class="btn btn-ghost" data-engineering-ship="${ship.id}">Attempt Action</button>
+                <div class="hint" id="engineering-error-${ship.id}"></div>` : '<div class="hint">No available engineer action.</div>'}`;
+        }).join('')}
         <button class="btn btn-primary" id="btn-end-eng">End Engineering</button>`;
+    for (const ship of ships) {
+        const select = document.getElementById(`engineering-action-${ship.id}`);
+        if (!select) continue;
+        const shieldPanel = document.getElementById(`shield-allocation-${ship.id}`);
+        const update = () => { shieldPanel.hidden = select.value !== 'Divert|Shields'; };
+        select.addEventListener('change', update);
+        update();
+        actionPanel.querySelector(`[data-engineering-ship="${ship.id}"]`).addEventListener('click', async () => {
+            const [action, target] = select.value.split('|');
+            const shields = target === 'Shields' ? Object.fromEntries(['forward', 'starboard', 'aft', 'port']
+                .map(q => [q, Number(document.getElementById(`shield-${ship.id}-${q}`).value)])) : null;
+            try {
+                await api(`/${roomCode}/engineering`, { shipId: ship.id, crewIndex: Number(document.getElementById(`engineer-${ship.id}`).value), action, target, shields });
+                await fetchState();
+            } catch (err) { document.getElementById(`engineering-error-${ship.id}`).textContent = `Could not attempt action: ${err.message}`; }
+        });
+    }
     document.getElementById('btn-end-eng').addEventListener('click', async () => {
         await api(`/${roomCode}/end-engineering`);
         await fetchState();
@@ -730,7 +766,7 @@ function clearWeaponRange() {
 
 function showShipDetails(ship) {
     const shieldTotal = Object.values(ship.shields || {}).reduce((a, b) => a + b, 0);
-    const shieldMax = (ship.maxShield ?? 0) * 4;
+    const shieldMax = ship.shieldCapacity ?? (ship.maxShield ?? 0) * 4;
     const arcs = ['forward', 'starboard', 'aft', 'port'];
 
     // Reset the pin if it no longer refers to this ship.
@@ -746,7 +782,10 @@ function showShipDetails(ship) {
         </div>`).join('');
 
     const systemsHtml = (ship.damagedSystems || []).length
-        ? `<div class="detail-section">Damaged Systems</div><ul class="detail-list detail-list-damaged">${ship.damagedSystems.map(s => `<li>${s.system} — ${s.condition}</li>`).join('')}</ul>`
+        ? `<div class="detail-section">Damaged Systems</div><ul class="detail-list detail-list-damaged">${ship.damagedSystems.map(s => {
+            const effective = (ship.systems || []).find(x => x.system === s.system)?.effectiveCondition;
+            return `<li>${s.system} — ${s.condition}${effective && effective !== s.condition ? ` (held: ${effective})` : ''}</li>`;
+        }).join('')}</ul>`
         : '';
 
     const crewHtml = (ship.crew || []).map(crew => {

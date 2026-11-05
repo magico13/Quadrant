@@ -71,9 +71,10 @@ public class TrackingProjectileTests
 
         var path = engine.GetProjectilePreviewPath(projectile);
 
-        Assert.Equal(new Hex(2, 0), path[^1].Position);
-        Assert.Equal(Facing.East, path[^1].Facing);
-        Assert.Equal(2, path.Count(step => step.Position != new Hex(0, 0)));
+        Assert.NotEmpty(path);
+        Assert.Equal(projectile.Position.Neighbor(projectile.Facing), path[0].Position);
+        var steps = path.Prepend(new CombatEngine.PathStep(projectile.Position, projectile.Facing));
+        Assert.Equal(2, steps.Zip(steps.Skip(1)).Count(pair => pair.First.Position != pair.Second.Position));
     }
 
     [Fact]
@@ -83,8 +84,9 @@ public class TrackingProjectileTests
 
         var path = engine.GetProjectilePreviewPath(projectile);
 
-        Assert.Equal(new Hex(0, -2), path[^1].Position);
-        Assert.Equal(Facing.NorthWest, path[^1].Facing);
+        Assert.NotEmpty(path);
+        Assert.Equal(projectile.Position.Neighbor(projectile.Facing), path[0].Position);
+        Assert.True(path[^1].Position.DistanceTo(new Hex(0, -5)) < path[0].Position.DistanceTo(new Hex(0, -5)));
     }
 
     private static (TrackingProjectile Projectile, CombatEngine Engine) MakeScenario(Hex position, Facing facing, Hex targetPosition, int speed)

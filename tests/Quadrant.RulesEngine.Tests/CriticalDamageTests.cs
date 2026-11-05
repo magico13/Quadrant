@@ -5,6 +5,16 @@ namespace Quadrant.RulesEngine.Tests;
 
 public class CriticalDamageTests
 {
+    [Fact]
+    public void NaturalTwentyAndTwoThresholdCrossingsCauseThreeCriticalEffects()
+    {
+        var target = MakeShip(Facing.West, new Hex(1, 0), criticalThreshold: 7);
+        target.Shields.Forward = 0;
+        target.TotalHullDamageTaken = 1;
+        var result = CombatResolver.ApplyDamage(target, Q.Forward, 16, 20, new ScriptedDice(20, 50));
+        Assert.Equal(3, result.CriticalEffects.Count);
+        Assert.Equal(SystemCondition.Wrecked, target.Systems.Get(ShipSystem.WeaponsArray));
+    }
     [Theory]
     [InlineData(7, false)]
     [InlineData(8, true)]
@@ -140,6 +150,8 @@ public class CriticalDamageTests
         Assert.DoesNotContain(engine.LastEvents, e => e.Message.Contains("resolving at the end"));
         Assert.True(first.IsDisabled);
         Assert.True(second.IsDisabled);
+        Assert.Single(engine.LastEvents, e => e.Message.Contains("first (Team 1) is disabled!"));
+        Assert.Single(engine.LastEvents, e => e.Message.Contains("second (Team 2) is disabled!"));
         Assert.Equal("Mutual destruction", state.Winner);
     }
 
@@ -240,7 +252,7 @@ public class CriticalDamageTests
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
 
-    private static ShipInstance MakeShip(Facing facing, Hex position, string id = "test-ship", int teamId = 0, int baseAc = 12, int gunnerBonus = 3, IReadOnlyList<Weapon>? weapons = null)
+    private static ShipInstance MakeShip(Facing facing, Hex position, string id = "test-ship", int teamId = 0, int baseAc = 12, int gunnerBonus = 3, IReadOnlyList<Weapon>? weapons = null, int criticalThreshold = 11)
     {
         var def = new ShipDefinition
         {
@@ -252,7 +264,7 @@ public class CriticalDamageTests
             BaseAC = baseAc,
             BaseTL = 12,
             DamageThreshold = 0,
-            CriticalThreshold = 11,
+            CriticalThreshold = criticalThreshold,
             GunnerBaseAttack = gunnerBonus,
             Weapons = weapons ?? [],
             Shields = new QuadrantShields

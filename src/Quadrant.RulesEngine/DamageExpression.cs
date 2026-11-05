@@ -48,11 +48,11 @@ public sealed record DamageExpression(int DiceCount, int Sides, int FlatBonus, i
     }
 
     /// <summary>Rolls this expression using the provided dice roller.</summary>
-    public int Roll(IDiceRoller dice)
+    public int Roll(IDiceRoller dice, bool divertWeapons = false)
     {
         int total = 0;
         for (int i = 0; i < DiceCount; i++)
-            total += dice.Roll(Sides);
+            total += divertWeapons ? Math.Max(2, dice.Roll(Sides)) : dice.Roll(Sides);
         if (Multiplier != 1) total *= Multiplier;
         return total + FlatBonus;
     }
