@@ -16,7 +16,7 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 ## Current State
 - A playable hotseat combat loop is in place, with server-side rules, room codes, and a browser client.
 - The working tree contains uncommitted catalog and fleet setup work: ship and weapon JSON files, startup loading, a catalog API, and a UI for selecting ships for each team. This work has not yet been committed.
-- Six ship definitions and a larger weapon catalog are present. Limited Fire and tracking projectiles are implemented; other weapon special tags remain catalog data.
+- Seven ship definitions and a larger weapon catalog are present, including the Starhive Drone MK III, Hivonyx Titan Hauler, and Uie Hiveguard. Limited Fire and tracking projectiles are implemented; other weapon special tags remain catalog data.
 - Tracking projectiles now use catalog speed, acquire against TL, home each gunnery phase, and impact using normal shields/hull/critical rules.
 - Ship editing, per-player access and hidden information, and real-time synchronization remain future work. The architecture and v1 scope below describe targets, not all current implementation.
 
@@ -38,6 +38,8 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 - [ ] Audit existing movement, attacks, critical damage and phase timing against the local `wiki_pages/Chapter 9_ Starships - Rules - Archives of Nethys_ Starfinder RPG Database.html` and document deliberate deviations.
 - [ ] Model crew, roles, role changes, action limits, skills, Resolve, minor actions and crew casualties.
 - [ ] Implement crew actions, stunts, system damage effects and engineering repairs.
+- [ ] **Computer ICM bonuses.** Track each computer node's bonus and uses per round; prompt before an eligible starship combat check to apply one available node. Multiple nodes can affect separate checks, but bonuses cannot stack on one check.
+- [ ] **Linked weapon batteries.** Group identical direct-fire mounts in the same arc; resolve each linked group as one gunnery action and check, with combined damage.
 - [ ] Implement remaining tracking weapon and special property rules using the relevant linked rules.
 - [ ] Playtest the completed hotseat combat loop; ship editing remains separate content work.
 

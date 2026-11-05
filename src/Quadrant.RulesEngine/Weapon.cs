@@ -1,8 +1,8 @@
 namespace Quadrant.RulesEngine;
 
 /// <summary>
-/// A starship weapon mount. Each weapon can be fired once per round (with rare
-/// exceptions for linked weapons, deferred to a later version).
+/// A starship weapon mount. Linked mounts share a group identifier; firing linked
+/// batteries as one gunnery action is handled separately from this data model.
 /// </summary>
 public sealed record Weapon
 {
@@ -11,6 +11,9 @@ public sealed record Weapon
 
     /// <summary>Which arc this weapon fires from.</summary>
     public required FiringArc Arc { get; init; }
+
+    /// <summary>Identifier shared by mounts in the same linked battery; null when unlinked.</summary>
+    public string? LinkedGroup { get; init; }
 
     /// <summary>Minimum range in hexes (inclusive).</summary>
     public int MinRange { get; init; } = 1;

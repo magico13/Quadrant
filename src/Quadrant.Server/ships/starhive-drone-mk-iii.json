@@ -1,0 +1,49 @@
+{
+  "id": "starhive-drone-mk-iii",
+  "name": "Starhive Drone MK III",
+  "tier": 1,
+  "source": "Starfinder Core Rulebook pg. 312",
+  "type": "Small light freighter",
+  "speed": 8,
+  "maneuverability": "good",
+  "drift": 1,
+  "ac": 14,
+  "tl": 13,
+  "hp": 40,
+  "dt": null,
+  "ct": 8,
+  "shields": {
+    "type": "basic",
+    "total": 10,
+    "forward": 3,
+    "port": 2,
+    "starboard": 2,
+    "aft": 3
+  },
+  "weapons": [
+    { "weaponId": "gyrolaser", "arc": "forward", "linkedGroup": "forward-gyrolasers" },
+    { "weaponId": "gyrolaser", "arc": "forward", "linkedGroup": "forward-gyrolasers" },
+    { "weaponId": "light-torpedo-launcher", "arc": "port" },
+    { "weaponId": "light-torpedo-launcher", "arc": "starboard" }
+  ],
+  "powerCore": { "name": "Pulse Brown", "pcu": 90 },
+  "driftEngine": "Signal Basic",
+  "systems": [
+    "budget mid-range sensors",
+    "crew quarters (basic)",
+    "mk 2 armor",
+    "mk 1 defenses",
+    "mk 1 mononode computer"
+  ],
+  "expansionBays": ["cargo holds (2)", "escape pods"],
+  "modifiers": { "piloting": 1 },
+  "complement": 6,
+  "crew": [
+    { "role": "Captain", "ranks": 1, "skills": { "computers": 5, "diplomacy": 5, "engineering": 5, "gunnery": 5 } },
+    { "role": "Engineer", "ranks": 1, "skills": { "engineering": 10 } },
+    { "role": "Gunner", "ranks": 1, "skills": { "gunnery": 5 } },
+    { "role": "Gunner", "ranks": 1, "skills": { "gunnery": 5 } },
+    { "role": "Pilot", "ranks": 1, "skills": { "piloting": 6 } },
+    { "role": "Science Officer", "ranks": 1, "skills": { "computers": 5 } }
+  ]
+}

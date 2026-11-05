@@ -1,0 +1,50 @@
+{
+  "id": "uie-hiveguard",
+  "name": "Uie Hiveguard",
+  "tier": 6,
+  "source": "Starfinder Core Rulebook pg. 313",
+  "type": "Large destroyer",
+  "speed": 8,
+  "maneuverability": "average",
+  "drift": 1,
+  "ac": 19,
+  "tl": 19,
+  "hp": 170,
+  "dt": null,
+  "ct": 34,
+  "shields": {
+    "type": "light",
+    "total": 60,
+    "forward": 15,
+    "port": 15,
+    "starboard": 15,
+    "aft": 15
+  },
+  "weapons": [
+    { "weaponId": "heavy-laser-net", "arc": "forward" },
+    { "weaponId": "twin-laser", "arc": "forward" },
+    { "weaponId": "flak-thrower", "arc": "port" },
+    { "weaponId": "flak-thrower", "arc": "starboard" },
+    { "weaponId": "light-torpedo-launcher", "arc": "allArcs" }
+  ],
+  "powerCore": { "name": "Arcus Maximum", "pcu": 200 },
+  "driftEngine": "Signal Basic",
+  "systems": [
+    "basic long-range sensors",
+    "crew quarters (common)",
+    "mk 4 armor",
+    "mk 4 defenses",
+    "mk 1 trinode computer"
+  ],
+  "expansionBays": ["cargo bay", "escape pods (3)"],
+  "modifiers": { "computers": 2 },
+  "complement": 13,
+  "crew": [
+    { "role": "Captain", "ranks": 6, "skills": { "bluff": 13, "computers": 15, "diplomacy": 13, "engineering": 13, "gunnery": 11, "intimidate": 13, "piloting": 13 } },
+    { "role": "Engineer", "ranks": 6, "skills": { "engineering": 18 } },
+    { "role": "Gunner", "ranks": 6, "skills": { "gunnery": 11 } },
+    { "role": "Gunner", "ranks": 6, "skills": { "gunnery": 11 } },
+    { "role": "Pilot", "ranks": 6, "skills": { "piloting": 13 } },
+    { "role": "Science Officer", "ranks": 6, "skills": { "computers": 15 } }
+  ]
+}

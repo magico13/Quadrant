@@ -1,0 +1,49 @@
+{
+  "id": "hivonyx-titan-hauler",
+  "name": "Hivonyx Titan Hauler",
+  "tier": 9,
+  "source": "Starfinder Core Rulebook pg. 313",
+  "type": "Huge bulk freighter",
+  "speed": 6,
+  "maneuverability": "poor",
+  "drift": 1,
+  "ac": 22,
+  "tl": 21,
+  "hp": 200,
+  "dt": 5,
+  "ct": 40,
+  "shields": {
+    "type": "medium",
+    "total": 100,
+    "forward": 25,
+    "port": 25,
+    "starboard": 25,
+    "aft": 25
+  },
+  "weapons": [
+    { "weaponId": "maser", "arc": "forward" },
+    { "weaponId": "particle-beam", "arc": "aft" },
+    { "weaponId": "heavy-plasma-torpedo-launcher", "arc": "allArcs" },
+    { "weaponId": "heavy-plasma-torpedo-launcher", "arc": "allArcs" }
+  ],
+  "powerCore": { "name": "Nova Ultra", "pcu": 300 },
+  "driftEngine": "Signal Basic",
+  "systems": [
+    "basic long-range sensors",
+    "crew quarters (common)",
+    "mk 5 armor",
+    "mk 5 defenses",
+    "mk 3 mononode computer"
+  ],
+  "expansionBays": ["cargo holds (5)", "escape pods (5)"],
+  "modifiers": { "computers": 2 },
+  "complement": 35,
+  "crew": [
+    { "role": "Captain", "ranks": 9, "skills": { "bluff": 17, "computers": 19, "diplomacy": 17, "engineering": 17, "gunnery": 15, "intimidate": 17, "piloting": 17 } },
+    { "role": "Engineer", "ranks": 9, "skills": { "engineering": 17 } },
+    { "role": "Gunner", "ranks": 9, "skills": { "gunnery": 15 } },
+    { "role": "Gunner", "ranks": 9, "skills": { "gunnery": 15 } },
+    { "role": "Pilot", "ranks": 9, "skills": { "piloting": 22 } },
+    { "role": "Science Officer", "ranks": 9, "skills": { "computers": 19 } }
+  ]
+}

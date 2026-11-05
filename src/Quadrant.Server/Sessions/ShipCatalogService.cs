@@ -165,6 +165,7 @@ public class ShipCatalogService
                 {
                     Name = wDef.Name,
                     Arc = ParseArc(wRef.Arc),
+                    LinkedGroup = wRef.LinkedGroup,
                     MinRange = wDef.MinRange,
                     RangeIncrement = wDef.RangeIncrement,
                     Damage = DamageExpression.From(wDef.Damage),
@@ -287,6 +288,7 @@ public class ShipJson
 public class ShipSystemsModifiersJson
 {
     public int Computers { get; set; }
+    public int Piloting { get; set; }
 }
 
 public class ShipPowerCoreJson
@@ -315,6 +317,7 @@ public class ShipWeaponRef
 {
     public required string WeaponId { get; set; }
     public string Arc { get; set; } = "forward";
+    public string? LinkedGroup { get; set; }
 }
 
 public class WeaponDef
