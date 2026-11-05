@@ -1,0 +1,34 @@
+{
+  "id": "norikama-reliant",
+  "name": "Norikama Reliant",
+  "family": "Veskarium Ship Styles",
+  "tier": 4,
+  "source": "Near Space pg. 120",
+  "type": "Small light freighter",
+  "speed": 6,
+  "maneuverability": "good",
+  "drift": 2,
+  "ac": 19,
+  "tl": 19,
+  "hp": 50,
+  "dt": null,
+  "ct": 10,
+  "shields": { "type": "light", "total": 50, "forward": 15, "port": 10, "starboard": 10, "aft": 15 },
+  "weapons": [
+    { "weaponId": "gyrolaser", "arc": "forward", "linkedGroup": "forward-gyrolasers" },
+    { "weaponId": "gyrolaser", "arc": "forward", "linkedGroup": "forward-gyrolasers" },
+    { "weaponId": "tactical-nuclear-missile-launcher", "arc": "port" },
+    { "weaponId": "tactical-nuclear-missile-launcher", "arc": "starboard" }
+  ],
+  "powerCore": { "name": "Pulse Green", "pcu": 150 },
+  "systems": ["advanced long-range sensors", "crew quarters (common)", "mk 3 duonode computer", "mk 4 armor", "mk 4 defenses"],
+  "modifiers": { "computers": 4, "piloting": 2 },
+  "complement": 5,
+  "crew": [
+    { "role": "Captain", "ranks": 4, "skills": { "computers": 10, "engineering": 10, "gunnery": 9, "intimidate": 10, "piloting": 12 } },
+    { "role": "Engineer", "ranks": 4, "skills": { "engineering": 15 } },
+    { "role": "Gunner", "ranks": 4, "skills": { "gunnery": 9 } },
+    { "role": "Pilot", "ranks": 4, "skills": { "piloting": 12 } },
+    { "role": "Science Officer", "ranks": 4, "skills": { "computers": 10 } }
+  ]
+}

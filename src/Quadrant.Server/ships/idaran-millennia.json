@@ -1,0 +1,37 @@
+{
+  "id": "idaran-millennia",
+  "name": "Idaran Millennia",
+  "family": "Kasathan Ship Styles",
+  "tier": 12,
+  "source": "Starfinder Core Rulebook pg. 309",
+  "type": "Gargantuan carrier",
+  "speed": 4,
+  "maneuverability": "poor",
+  "drift": 1,
+  "ac": 23,
+  "tl": 23,
+  "hp": 330,
+  "dt": 10,
+  "ct": 66,
+  "shields": { "type": "medium", "total": 160, "forward": 40, "port": 40, "starboard": 40, "aft": 40 },
+  "weapons": [
+    { "weaponId": "super-plasma-cannon", "arc": "forward" },
+    { "weaponId": "heavy-laser-cannon", "arc": "port" },
+    { "weaponId": "heavy-laser-cannon", "arc": "starboard" },
+    { "weaponId": "high-explosive-missile-launcher", "arc": "allArcs" },
+    { "weaponId": "high-explosive-missile-launcher", "arc": "allArcs" }
+  ],
+  "powerCore": { "name": "Gateway Heavy", "pcu": 400 },
+  "systems": ["budget long-range sensors", "crew quarters (common)", "mk 5 armor", "mk 6 defenses", "mk 2 trinode computer"],
+  "complement": 120,
+  "crew": [
+    { "role": "Captain", "ranks": 12, "skills": { "bluff": 22, "diplomacy": 22, "gunnery": 17, "intimidate": 22, "piloting": 23 } },
+    { "role": "Engineer", "ranks": 12, "skills": { "engineering": 22 } },
+    { "role": "Engineer", "ranks": 12, "skills": { "engineering": 22 } },
+    { "role": "Gunner", "ranks": 12, "skills": { "gunnery": 17 } },
+    { "role": "Gunner", "ranks": 12, "skills": { "gunnery": 17 } },
+    { "role": "Gunner", "ranks": 12, "skills": { "gunnery": 17 } },
+    { "role": "Pilot", "ranks": 12, "skills": { "piloting": 28 } },
+    { "role": "Science Officer", "ranks": 12, "skills": { "computers": 22 } }
+  ]
+}

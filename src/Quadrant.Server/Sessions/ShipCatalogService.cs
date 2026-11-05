@@ -68,7 +68,13 @@ public class ShipCatalogService
             }
         }
 
-        _ships.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+        _ships.Sort((a, b) =>
+        {
+            int family = string.Compare(a.Family, b.Family, StringComparison.OrdinalIgnoreCase);
+            if (family != 0) return family;
+            int tier = a.Tier.CompareTo(b.Tier);
+            return tier != 0 ? tier : string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+        });
         Console.WriteLine($"[ShipCatalog] Loaded {_ships.Count} ships.");
     }
 
@@ -168,7 +174,7 @@ public class ShipCatalogService
                     LinkedGroup = wRef.LinkedGroup,
                     MinRange = wDef.MinRange,
                     RangeIncrement = wDef.RangeIncrement,
-                    Damage = DamageExpression.From(wDef.Damage),
+                    Damage = DamageExpression.From(wRef.Damage ?? wDef.Damage),
                     Type = wDef.Type == "Tracking" ? WeaponType.Tracking : WeaponType.DirectFire,
                     ProjectileSpeed = wDef.Speed,
                     LimitedFireUses = ParseLimitedFireUses(wDef.Special)
@@ -184,6 +190,7 @@ public class ShipCatalogService
         {
             Id = entry.Id,
             Name = entry.Name,
+            Family = string.IsNullOrWhiteSpace(entry.Family) ? "Other" : entry.Family.Trim(),
             Tier = entry.Tier,
             Size = entry.Type?.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault(),
             Speed = entry.Speed,
@@ -265,6 +272,7 @@ public class ShipJson
 {
     public required string Id { get; set; }
     public required string Name { get; set; }
+    public string? Family { get; set; }
     public double Tier { get; set; } = 1;
     public string? Source { get; set; }
     public string? Type { get; set; }
@@ -318,6 +326,7 @@ public class ShipWeaponRef
     public required string WeaponId { get; set; }
     public string Arc { get; set; } = "forward";
     public string? LinkedGroup { get; set; }
+    public string? Damage { get; set; }
 }
 
 public class WeaponDef

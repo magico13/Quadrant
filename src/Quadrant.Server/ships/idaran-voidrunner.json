@@ -1,0 +1,23 @@
+{
+  "id": "idaran-voidrunner",
+  "name": "Idaran Voidrunner",
+  "family": "Kasathan Ship Styles",
+  "tier": 0.33,
+  "source": "Starfinder Core Rulebook pg. 308",
+  "type": "Tiny racer",
+  "speed": 12,
+  "maneuverability": "perfect",
+  "drift": null,
+  "ac": 15,
+  "tl": 14,
+  "hp": 20,
+  "dt": null,
+  "ct": 4,
+  "shields": { "type": "basic", "total": 10, "forward": 3, "port": 2, "starboard": 2, "aft": 3 },
+  "weapons": [{ "weaponId": "gyrolaser", "arc": "forward" }],
+  "powerCore": { "name": "Micron Heavy", "pcu": 70 },
+  "systems": ["basic computer", "basic mid-range sensors", "mk 2 armor", "mk 1 defenses"],
+  "modifiers": { "computers": 2, "piloting": 1 },
+  "complement": 1,
+  "crew": [{ "role": "Pilot", "ranks": 1, "skills": { "computers": 7, "gunnery": 3, "piloting": 11 } }]
+}

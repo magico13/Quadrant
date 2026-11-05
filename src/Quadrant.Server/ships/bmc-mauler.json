@@ -1,0 +1,31 @@
+{
+  "id": "bmc-mauler",
+  "name": "BMC Mauler",
+  "family": "Veskarium Ship Styles",
+  "tier": 2,
+  "source": "Starfinder Core Rulebook pg. 314",
+  "type": "Tiny fighter",
+  "speed": 10,
+  "maneuverability": "good",
+  "drift": 1,
+  "ac": 19,
+  "tl": 18,
+  "hp": 35,
+  "dt": null,
+  "ct": 7,
+  "shields": { "type": "basic", "total": 40, "forward": 10, "port": 10, "starboard": 10, "aft": 10 },
+  "weapons": [
+    { "weaponId": "light-plasma-cannon", "arc": "forward" },
+    { "weaponId": "tactical-nuclear-missile-launcher", "arc": "forward" },
+    { "weaponId": "flak-thrower", "arc": "aft" }
+  ],
+  "powerCore": { "name": "Pulse Brown", "pcu": 90 },
+  "systems": ["advanced mid-range sensors", "mk 5 armor", "mk 5 defenses", "mk 1 mononode computer"],
+  "modifiers": { "computers": 4, "piloting": 1 },
+  "complement": 2,
+  "crew": [
+    { "role": "Captain", "ranks": 2, "skills": { "computers": 11, "gunnery": 6, "piloting": 12 } },
+    { "role": "Gunner", "ranks": 2, "skills": { "gunnery": 6 } },
+    { "role": "Pilot", "ranks": 2, "skills": { "computers": 11, "gunnery": 7, "piloting": 12 } }
+  ]
+}

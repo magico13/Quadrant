@@ -18,6 +18,7 @@ let selectedShots = new Map(); // gunnery: weaponIndex → targetShipId (one tar
 let activeWeapon = null;   // currently selected weapon in gunnery targeting
 let selectedTargetArcs = new Map();
 let detailsShipId = null;  // ship currently shown in the details panel
+let lastActiveShipId = null;
 let pendingMove = null;    // helm: { option, actorId } — move previewed, awaiting confirmation
 let refreshGunnery = null; // module-scope handle to the current gunnery refresh fn
 
@@ -76,6 +77,7 @@ async function launchGame(selections) {
     selectedTargetArcs.clear();
     activeWeapon = null;
     detailsShipId = null;
+    lastActiveShipId = null;
     hideShipDetails();
     logEl.innerHTML = '';
     hideSetup();
@@ -116,7 +118,17 @@ function hideSetup() {
 }
 
 function renderCatalogList() {
-    catalogListEl.innerHTML = catalog.map(s => `
+    const grouped = new Map();
+    for (const ship of [...catalog].sort((a, b) =>
+        (a.family || 'Other').localeCompare(b.family || 'Other') ||
+        a.tier - b.tier || a.name.localeCompare(b.name))) {
+        const family = ship.family || 'Other';
+        if (!grouped.has(family)) grouped.set(family, []);
+        grouped.get(family).push(ship);
+    }
+    catalogListEl.innerHTML = [...grouped].map(([family, ships]) => `
+        <h4 class="catalog-family">${family}</h4>
+        ${ships.map(s => `
         <div class="catalog-card">
             <div class="cc-top">
                 <span class="cc-name">${s.name}</span>
@@ -127,7 +139,7 @@ function renderCatalogList() {
             <div class="cc-add">
                 ${fleet.map((_, team) => `<button data-team="${team}" data-ship="${s.id}" style="color:${teamColor(team)}">+ Team ${team + 1}</button>`).join('')}
             </div>
-        </div>`).join('');
+        </div>`).join('')}`).join('');
 
     catalogListEl.querySelectorAll('.cc-add button').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -201,10 +213,18 @@ function render() {
     roundEl.textContent = `Round ${state.round}`;
     roomEl.textContent = roomCode || '';
 
+    if (state.currentActorId) {
+        if (detailsShipId && lastActiveShipId && lastActiveShipId !== state.currentActorId)
+            detailsShipId = state.currentActorId;
+        lastActiveShipId = state.currentActorId;
+    }
+
     // Feed ships to the grid.
     const ships = state.ships.map(s => ({
         id: s.id, name: s.name, teamId: s.teamId, q: s.q, r: s.r, facing: s.facing,
         hull: s.hull, maxHull: s.maxHull, shields: s.shields, maxShield: s.maxShield,
+        isDisabled: s.isDisabled, isDestroyed: s.isDestroyed,
+        isActive: s.id === state.currentActorId && ['Helm', 'Gunnery'].includes(state.phase),
     }));
     grid.setShips(ships);
     grid.setProjectiles(state.projectiles || []);
@@ -257,10 +277,11 @@ function renderRoster() {
         }
         const active = s.id === state.currentActorId ? ' active' : '';
         const selected = s.id === detailsShipId ? ' selected' : '';
+        const inactive = s.isDisabled || s.isDestroyed ? ' inactive' : '';
         const hp = isCombat ? ` <span class="roster-hp">${s.hull}/${s.maxHull}</span>` : '';
-        return `<div class="roster-entry${active}${selected}" style="--team-color:${teamColor(s.teamId)}" data-ship="${s.id}">
+        return `<div class="roster-entry${active}${selected}${inactive}" style="--team-color:${teamColor(s.teamId)}" data-ship="${s.id}">
             <span class="roster-dot"></span>
-            <span class="roster-name">${s.name} <small>(Team ${s.teamId + 1})</small></span>${hp}
+            <span class="roster-name"><span class="roster-ship-name">${s.name}</span> <small>(Team ${s.teamId + 1})</small></span>${hp}
         </div>`;
     }).join('');
 
@@ -331,7 +352,7 @@ function renderEngineering() {
             const options = [];
             if (!used.has('Divert')) for (const target of ['Engines', 'Science', 'Weapons', 'Shields'])
                 options.push(`<option value="Divert|${target}">Divert — ${target}</option>`);
-            if (!used.has('Hold It Together')) for (const system of ship.systems || [])
+            if (!used.has('Hold It Together')) for (const system of (ship.systems || []).filter(system => system.condition !== 'None'))
                 options.push(`<option value="Hold It Together|${system.system}">Hold It Together — ${system.system} (${system.condition})</option>`);
             return `<div class="detail-section" style="color:${teamColor(ship.teamId)}">${ship.name} (Team ${ship.teamId + 1})</div>
                 ${engineers.length && options.length ? `<div class="eng-row"><label>Engineer</label><select id="engineer-${ship.id}">${engineers.map(c => `<option value="${c.i}">${c.primaryRole} ${c.i + 1} (${c.roleBonus >= 0 ? '+' : ''}${c.roleBonus})</option>`).join('')}</select></div>
@@ -450,7 +471,7 @@ function renderHelm() {
                             <div class="eng-row"><label>To</label><select id="science-to-${ship.id}">${['Forward','Starboard','Aft','Port'].map(q => `<option value="${q}">${q}</option>`).join('')}</select></div>
                             <div class="eng-row"><label>Shield points</label><input type="number" id="science-amount-${ship.id}" min="1" value="1"></div>
                         </div>
-                        <div class="hint">Each quadrant must retain at least ${Math.ceil((ship.shields.forward + ship.shields.starboard + ship.shields.aft + ship.shields.port) / 10)} SP.</div>
+                        <div class="hint">Transfers cannot reduce the source below ${Math.ceil((ship.shields.forward + ship.shields.starboard + ship.shields.aft + ship.shields.port) / 10)} SP. Even distribution requires this in every quadrant.</div>
                     </div>
                     <div id="science-target-${ship.id}" hidden>
                         <div class="eng-row"><label>Enemy</label><select id="science-enemy-${ship.id}">${availableEnemies.map(target => {
@@ -459,7 +480,7 @@ function renderHelm() {
                             return `<option value="${target.id}">${target.name} — ${distance} hex${distance === 1 ? '' : 'es'}${rangePenalty ? `, sensor check ${rangePenalty}` : ''} (+${target.countermeasures} countermeasures)</option>`;
                         }).join('')}</select></div>
                         <div class="eng-row"><label>System</label><select id="science-system-${ship.id}"><option value="PowerCore">Core</option><option value="Engines">Engines</option><option value="LifeSupport">Life Support</option><option value="Sensors">Sensors</option><option value="WeaponsArray">Weapons</option></select></div>
-                        <div class="hint">The listed Computers bonus already includes ship system modifiers. ${sensorRange ? `Active sensor range: ${sensorRange} hexes per increment, maximum ${sensorRange * 5} hexes; checks take –2 per increment beyond the first.` : 'No sensor range is listed for this ship.'}</div>
+                        <div class="hint">${sensorRange ? `Sensor range: ${sensorRange}/${sensorRange * 5}` : ship.hasSensors ? 'Sensor range not specified.' : 'No sensors installed.'}</div>
                     </div>
                     <button class="btn btn-ghost" data-science-ship="${ship.id}">Attempt Science Action</button>
                     <div class="hint" id="science-error-${ship.id}"></div>` : '<div class="hint">No Science Officer action available this round.</div>';
@@ -689,6 +710,11 @@ function renderGunnery() {
         activeWeapon = usableIndices[0] ?? null;
 
     const chipIndices = new Set([...weapons.keys(), ...fired, ...(actor.weapons || []).map((w, i) => w.limitedFireUses > 0 && w.usesRemaining === 0 ? i : null).filter(i => i !== null)]);
+    for (const widx of [...chipIndices]) {
+        const weapon = actor.weapons?.[widx];
+        if (weapon?.linkedCount > 1 && weapon.linkedGroup && actor.weapons.findIndex(w => w.linkedGroup === weapon.linkedGroup) !== widx)
+            chipIndices.delete(widx);
+    }
     const chips = [...chipIndices].sort((a, b) => a - b).map(widx => {
         const w = actor.weapons?.[widx];
         if (!w) return '';
@@ -697,7 +723,7 @@ function renderGunnery() {
         const ammo = w.limitedFireUses > 0 ? ` · ${w.usesRemaining}/${w.limitedFireUses}` : '';
         const exhausted = w.limitedFireUses > 0 && w.usesRemaining === 0;
         const isFired = fired.has(widx);
-        return `<button class="weapon-chip${activeWeapon === widx ? ' active' : ''}${isFired ? ' fired' : ''}" data-weapon="${widx}" ${(exhausted || isFired) ? `disabled title="${isFired ? 'Already fired this round' : 'Out of ammunition'}"` : ''}>${w.name}${arcLabel}${dmg}${ammo}${isFired ? ' · FIRED' : ''}</button>`;
+        return `<button class="weapon-chip${activeWeapon === widx ? ' active' : ''}${isFired ? ' fired' : ''}" data-weapon="${widx}" ${(exhausted || isFired) ? `disabled title="${isFired ? 'Already fired this round' : 'Out of ammunition'}"` : ''}>${w.displayName || w.name}${arcLabel}${dmg}${ammo}${isFired ? ' · FIRED' : ''}</button>`;
     }).join('');
 
     actionPanel.innerHTML = `
@@ -766,6 +792,7 @@ function renderGunnery() {
         const targetId = activeWeapon === null ? null : selectedShots.get(activeWeapon);
         const activeOption = activeWeapon === null ? null : (weapons.get(activeWeapon) || []).find(o => o.targetShipId === targetId);
         const missingArcChoice = !!activeOption?.arcChoiceRequired && !selectedTargetArcs.has(targetId);
+        grid.setSelectedGunneryTarget(targetId ? actor.id : null, targetId);
         fireBtn.disabled = activeWeapon === null || !targetId || fired.has(activeWeapon) || missingArcChoice;
     }
 
@@ -861,16 +888,20 @@ function showShipDetails(ship) {
         clearWeaponRange();
     }
 
-    const weaponsHtml = (ship.weapons || []).map((w, i) => `
+    const shipWeapons = ship.weapons || [];
+    const weaponsHtml = shipWeapons.map((w, i) => ({ w, i }))
+        .filter(({ w, i }) => (w.linkedCount || 1) <= 1 || !w.linkedGroup || shipWeapons.findIndex(candidate => candidate.linkedGroup === w.linkedGroup) === i)
+        .map(({ w, i }) => `
         <div class="detail-weapon dw-hoverable" data-weapon-index="${i}">
-            <span class="dw-name">${w.name}</span>
+            <span class="dw-name">${w.displayName || w.name}${w.linkedCount > 1 ? ` (${w.linkedCount} mounts)` : ''}</span>
             <span class="dw-meta">${w.arc} · inc ${w.rangeIncrement ?? 5} · ${w.damage}${w.type ? ` · ${w.type}` : ''}${w.limitedFireUses > 0 ? ` · ${w.usesRemaining}/${w.limitedFireUses} shots` : ''}</span>
         </div>`).join('');
 
     const systemsHtml = (ship.damagedSystems || []).length
         ? `<div class="detail-section">Damaged Systems</div><ul class="detail-list detail-list-damaged">${ship.damagedSystems.map(s => {
             const effective = (ship.systems || []).find(x => x.system === s.system)?.effectiveCondition;
-            return `<li>${s.system} — ${s.condition}${effective && effective !== s.condition ? ` (held: ${effective})` : ''}</li>`;
+            const effectiveLabel = effective === 'None' ? 'Healthy' : effective;
+            return `<li>${s.system} — ${s.condition}${effective && effective !== s.condition ? ` (held: ${effectiveLabel})` : ''}</li>`;
         }).join('')}</ul>`
         : '';
 

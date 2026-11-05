@@ -1,0 +1,32 @@
+{
+  "id": "idaran-vanserai",
+  "name": "Idaran Vanserai",
+  "family": "Kasathan Ship Styles",
+  "tier": 4,
+  "source": "Starfinder Core Rulebook pg. 309",
+  "type": "Large heavy freighter",
+  "speed": 6,
+  "maneuverability": "average",
+  "drift": 1,
+  "ac": 16,
+  "tl": 15,
+  "hp": 140,
+  "dt": null,
+  "ct": 28,
+  "shields": { "type": "light", "total": 40, "forward": 10, "port": 10, "starboard": 10, "aft": 10 },
+  "weapons": [
+    { "weaponId": "heavy-laser-cannon", "arc": "forward" },
+    { "weaponId": "heavy-laser-cannon", "arc": "port" },
+    { "weaponId": "heavy-laser-cannon", "arc": "starboard" }
+  ],
+  "powerCore": { "name": "Arcus Ultra", "pcu": 150 },
+  "systems": ["basic computer", "budget short-range sensors", "crew quarters (common)", "mk 4 armor", "mk 3 defenses"],
+  "complement": 10,
+  "crew": [
+    { "role": "Captain", "ranks": 4, "skills": { "bluff": 15, "computers": 10, "diplomacy": 15, "engineering": 10, "gunnery": 9, "piloting": 11 } },
+    { "role": "Engineer", "ranks": 4, "skills": { "engineering": 10 } },
+    { "role": "Gunner", "ranks": 4, "skills": { "gunnery": 9 } },
+    { "role": "Pilot", "ranks": 4, "skills": { "piloting": 16 } },
+    { "role": "Science Officer", "ranks": 4, "skills": { "computers": 10 } }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "bmc-predator",
+  "name": "BMC Predator",
+  "family": "Veskarium Ship Styles",
+  "tier": 9,
+  "source": "Near Space pg. 120",
+  "type": "Small shuttle",
+  "speed": 10,
+  "maneuverability": "perfect",
+  "drift": 5,
+  "ac": 26,
+  "tl": 24,
+  "hp": 45,
+  "dt": null,
+  "ct": 9,
+  "shields": { "type": "medium", "total": 100, "forward": 25, "port": 25, "starboard": 25, "aft": 25 },
+  "weapons": [
+    { "weaponId": "light-plasma-cannon", "arc": "forward", "linkedGroup": "linked-plasma-cannons" },
+    { "weaponId": "light-plasma-cannon", "arc": "forward", "linkedGroup": "linked-plasma-cannons" },
+    { "weaponId": "flak-thrower", "arc": "allArcs" }
+  ],
+  "powerCore": { "name": "Pulse Orange", "pcu": 250 },
+  "systems": ["advanced short-range sensors", "crew quarters (good)", "mk 2 trinode computer", "mk 5 defenses", "mk 6 armor", "security (advanced cloaking device, anti-hacking systems, computer countermeasures [shock grid rank 1], self-destruct system)"],
+  "modifiers": { "computers": 4, "piloting": 2 },
+  "complement": 1,
+  "crew": [{ "role": "Captain", "ranks": 9, "skills": { "computers": 17, "engineering": 17, "gunnery": 15, "piloting": 24 } }]
+}

@@ -39,7 +39,7 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 - [ ] Model crew, roles, role changes, action limits, skills, Resolve, minor actions and crew casualties.
 - [ ] Implement crew actions, stunts, system damage effects and engineering repairs.
 - [ ] **Computer ICM bonuses.** Track each computer node's bonus and uses per round; prompt before an eligible starship combat check to apply one available node. Multiple nodes can affect separate checks, but bonuses cannot stack on one check.
-- [ ] **Linked weapon batteries.** Group identical direct-fire mounts in the same arc; resolve each linked group as one gunnery action and check, with combined damage.
+- [x] **Linked weapon batteries.** Group identical direct-fire mounts in the same arc; resolve each linked group as one gunnery action and check, with combined damage.
 - [ ] Implement remaining tracking weapon and special property rules using the relevant linked rules.
 - [ ] Playtest the completed hotseat combat loop; ship editing remains separate content work.
 

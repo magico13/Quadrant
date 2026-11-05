@@ -1,0 +1,35 @@
+{
+  "id": "norikama-dropship",
+  "name": "Norikama Dropship",
+  "family": "Veskarium Ship Styles",
+  "tier": 8,
+  "source": "Starfinder Core Rulebook pg. 315",
+  "type": "Medium transport",
+  "speed": 12,
+  "maneuverability": "average",
+  "drift": 2,
+  "ac": 24,
+  "tl": 23,
+  "hp": 100,
+  "dt": null,
+  "ct": 20,
+  "shields": { "type": "light", "total": 80, "forward": 20, "port": 20, "starboard": 20, "aft": 20 },
+  "weapons": [
+    { "weaponId": "coilgun", "arc": "forward" },
+    { "weaponId": "persistent-particle-beam", "arc": "forward" },
+    { "weaponId": "coilgun", "arc": "aft" },
+    { "weaponId": "light-plasma-cannon", "arc": "allArcs" },
+    { "weaponId": "light-plasma-cannon", "arc": "allArcs" }
+  ],
+  "powerCore": { "name": "Pulse Orange", "pcu": 250 },
+  "systems": ["basic long-range sensors", "crew quarters (common)", "mk 6 armor", "mk 6 defenses", "mk 3 duonode computer"],
+  "modifiers": { "computers": 2, "piloting": -1 },
+  "complement": 5,
+  "crew": [
+    { "role": "Captain", "ranks": 8, "skills": { "engineering": 16, "gunnery": 14, "intimidate": 16, "piloting": 15 } },
+    { "role": "Engineer", "ranks": 8, "skills": { "engineering": 16 } },
+    { "role": "Gunner", "ranks": 8, "skills": { "gunnery": 14 } },
+    { "role": "Pilot", "ranks": 8, "skills": { "piloting": 20 } },
+    { "role": "Science Officer", "ranks": 8, "skills": { "computers": 18 } }
+  ]
+}

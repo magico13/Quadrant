@@ -12,6 +12,9 @@ public sealed record ShipDefinition
     public required string Id { get; init; }
     public required string Name { get; init; }
 
+    /// <summary>Optional faction, lineage, or design family used to group ships in the catalog.</summary>
+    public string Family { get; init; } = "Other";
+
     /// <summary>Starship tier (e.g. 0.33, 1, 2, 3). Used for balance reference.</summary>
     public double Tier { get; init; } = 1;
 

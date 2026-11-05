@@ -1,6 +1,7 @@
 {
   "id": "starhive-drone-mk-iii",
   "name": "Starhive Drone MK III",
+  "family": "Shirren Ship Styles",
   "tier": 1,
   "source": "Starfinder Core Rulebook pg. 312",
   "type": "Small light freighter",

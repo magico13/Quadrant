@@ -30,6 +30,7 @@ public class GameController : ControllerBase
         {
             id = s.Id,
             name = s.Name,
+            family = s.Family,
             tier = s.Tier,
             speed = s.Speed,
             maneuverability = s.Maneuverability,
@@ -161,7 +162,26 @@ public class GameController : ControllerBase
                 helmAction = s.Definition.Crew.Count == 0 || s.CrewRoles.Contains("Pilot") ? "Pilot" : s.AvailableMinorCrew() >= 0 ? "Glide" : "None",
                 gunneryAction = s.Definition.Crew.Count == 0 || s.AvailableGunner() >= 0 ? "Gunner" : !s.GunnerActionTaken && s.AvailableMinorCrew() >= 0 ? "Snap Shot" : "None",
                 crewShotsRemaining = s.RemainingGunneryActions(),
-                weapons = s.Weapons.Select((w, i) => new { name = w.Name, arc = w.Arc, minRange = w.MinRange, rangeIncrement = w.RangeIncrement, maxFireRange = w.MaxFireRange, damage = w.Damage.ToString(), type = w.Type, projectileSpeed = w.ProjectileSpeed, limitedFireUses = w.LimitedFireUses, usesRemaining = s.WeaponUsesRemaining[i] }),
+                weapons = s.Weapons.Select((w, i) =>
+                {
+                    int linkedCount = LinkedMountCount(s.Weapons, w);
+                    return new
+                    {
+                        name = w.Name,
+                        displayName = linkedCount > 1 ? $"Linked {w.Name}" : w.Name,
+                        linkedGroup = w.LinkedGroup,
+                        linkedCount,
+                        arc = w.Arc,
+                        minRange = w.MinRange,
+                        rangeIncrement = w.RangeIncrement,
+                        maxFireRange = w.MaxFireRange,
+                        damage = CombinedDamage(w.Damage, linkedCount).ToString(),
+                        type = w.Type,
+                        projectileSpeed = w.ProjectileSpeed,
+                        limitedFireUses = w.LimitedFireUses,
+                        usesRemaining = s.WeaponUsesRemaining[i]
+                    };
+                }),
                 damagedSystems = s.DamagedSystems
             }),
             projectiles = projectileViews,
@@ -329,6 +349,24 @@ public class GameController : ControllerBase
     {
         while (engine.AutoEndGunneryTurnIfNoActions()) { }
     }
+
+    private static int LinkedMountCount(IReadOnlyList<Weapon> weapons, Weapon weapon)
+    {
+        if (weapon.Type != WeaponType.DirectFire || string.IsNullOrWhiteSpace(weapon.LinkedGroup)) return 1;
+        int count = weapons.Count(candidate => candidate.Type == WeaponType.DirectFire &&
+            candidate.LinkedGroup == weapon.LinkedGroup && candidate.Arc == weapon.Arc &&
+            candidate.Name == weapon.Name && candidate.Damage == weapon.Damage &&
+            candidate.MinRange == weapon.MinRange && candidate.RangeIncrement == weapon.RangeIncrement &&
+            candidate.LimitedFireUses == weapon.LimitedFireUses);
+        return count > 1 ? count : 1;
+    }
+
+    private static DamageExpression CombinedDamage(DamageExpression damage, int mountCount)
+        => damage with
+        {
+            DiceCount = damage.DiceCount * mountCount,
+            FlatBonus = damage.FlatBonus * mountCount
+        };
 }
 
 public sealed record StartGameRequest(List<ShipSelection>? Selections);

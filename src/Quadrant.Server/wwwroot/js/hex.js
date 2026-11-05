@@ -82,6 +82,7 @@ class HexGrid {
         this.rangeHexes = new Map();      // gunnery range: key -> band (1..3), faded per increment
         this.selectedShipId = null;
         this.targets = new Map(); // id -> hitChance (percent) for valid gunnery targets
+        this.selectedGunneryTarget = null; // { sourceId, targetId }
         this.ghost = null;        // {q, r, facing, teamId, name} — translucent preview ship
         this.path = null;         // [{q, r}, ...] — hex route of the previewed move
         this.onHexClick = null;   // callback (q, r) => void
@@ -255,7 +256,15 @@ class HexGrid {
     setRangeHexesOnly(hexes) { this.rangeHexes = new Map(hexes.map(h => [`${h.q},${h.r}`, h.band || 1])); this.draw(); }
     setSelected(id) { this.selectedShipId = id; this.draw(); }
     // Map of shipId -> hitChance percent for valid gunnery targets.
-    setTargets(targets) { this.targets = new Map(targets); this.draw(); }
+    setTargets(targets) {
+        this.targets = new Map(targets);
+        this.selectedGunneryTarget = null;
+        this.draw();
+    }
+    setSelectedGunneryTarget(sourceId, targetId) {
+        this.selectedGunneryTarget = sourceId && targetId ? { sourceId, targetId } : null;
+        this.draw();
+    }
     // Translucent preview ship (helm move confirmation). Pass null to clear.
     setGhost(ghost) { this.ghost = ghost; this.draw(); }
     // Hex route of the previewed move, drawn as a line through hex centers. Pass null to clear.
@@ -323,6 +332,26 @@ class HexGrid {
                 }
                 ctx.lineWidth = 1 / this.zoom;
                 ctx.stroke();
+            }
+        }
+
+        // Draw the active weapon's chosen target path behind ship markers.
+        if (this.selectedGunneryTarget) {
+            const source = this.ships.find(ship => ship.id === this.selectedGunneryTarget.sourceId);
+            const target = this.ships.find(ship => ship.id === this.selectedGunneryTarget.targetId);
+            if (source && target) {
+                const from = this._pixel(source.q, source.r);
+                const to = this._pixel(target.q, target.r);
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(from.x, from.y);
+                ctx.lineTo(to.x, to.y);
+                ctx.strokeStyle = '#ff4b4b';
+                ctx.lineWidth = 4 / this.zoom;
+                ctx.lineCap = 'round';
+                ctx.globalAlpha = 0.9;
+                ctx.stroke();
+                ctx.restore();
             }
         }
 
@@ -426,6 +455,7 @@ class HexGrid {
         const r = this.size * 0.42;
         const color = teamColor(ship.teamId);
         const isSelected = ship.id === this.selectedShipId;
+        const opacity = ship.isDisabled || ship.isDestroyed ? 0.3 : 1;
 
         // Shield arcs: four quadrants relative to facing, all on ONE circle.
         // Forward = 60° (facing face), Starboard = 120° (right side),
@@ -448,7 +478,7 @@ class HexGrid {
             ctx.strokeStyle = color;
             ctx.lineWidth = sq.lw;
             ctx.setLineDash(sq.dash);
-            ctx.globalAlpha = 0.2 + 0.35 * frac;
+            ctx.globalAlpha = opacity * (0.2 + 0.35 * frac);
             const s = (sq.start + rot) * Math.PI / 180;
             const en = (sq.end + rot) * Math.PI / 180;
             ctx.arc(x, y, shieldRad, s, en);
@@ -456,6 +486,22 @@ class HexGrid {
         }
         ctx.setLineDash([]);
         ctx.restore();
+
+        if (ship.isActive) {
+            ctx.save();
+            ctx.beginPath();
+            const activeHex = Hex.corners(x, y, this.size * 1.02);
+            ctx.moveTo(activeHex[0].x, activeHex[0].y);
+            for (let i = 1; i < activeHex.length; i++) ctx.lineTo(activeHex[i].x, activeHex[i].y);
+            ctx.closePath();
+            ctx.strokeStyle = '#ffd54f';
+            ctx.lineWidth = 3 / this.zoom;
+            ctx.globalAlpha = 0.95;
+            ctx.shadowColor = '#ffd54f';
+            ctx.shadowBlur = 8 / this.zoom;
+            ctx.stroke();
+            ctx.restore();
+        }
 
         // Ship body: elongated dart pointing in the facing direction.
         // Pointy-top hex directions are at screen angles F*60-120 degrees.
@@ -478,9 +524,9 @@ class HexGrid {
 
         const hullFrac = Math.max(0, ship.hull / ship.maxHull);
         ctx.fillStyle = color;
-        ctx.globalAlpha = 0.35 + 0.55 * hullFrac;
+        ctx.globalAlpha = opacity * (0.35 + 0.55 * hullFrac);
         ctx.fill();
-        ctx.globalAlpha = 1;
+        ctx.globalAlpha = opacity;
         ctx.strokeStyle = isSelected ? '#ffffff' : color;
         ctx.lineWidth = isSelected ? 2 : 1.2;
         ctx.stroke();
@@ -490,7 +536,7 @@ class HexGrid {
         ctx.moveTo(0, -nose * 0.8);
         ctx.lineTo(0, rear * 0.3);
         ctx.strokeStyle = '#ffffff';
-        ctx.globalAlpha = 0.4;
+        ctx.globalAlpha = opacity * 0.4;
         ctx.lineWidth = 1;
         ctx.stroke();
 
@@ -501,7 +547,7 @@ class HexGrid {
         ctx.font = `${Math.max(9, this.size * 0.35)}px 'Segoe UI', sans-serif`;
         ctx.textAlign = 'center';
         ctx.fillStyle = '#d5deea';
-        ctx.globalAlpha = 0.9;
+        ctx.globalAlpha = opacity * 0.9;
         ctx.fillText(ship.name, x, y + r + 16);
         ctx.restore();
 
@@ -515,7 +561,7 @@ class HexGrid {
             ctx.strokeStyle = '#ffd54f';
             ctx.lineWidth = 2 / this.zoom;
             ctx.setLineDash([6, 4]);
-            ctx.globalAlpha = 0.9;
+            ctx.globalAlpha = opacity * 0.9;
             ctx.stroke();
             ctx.setLineDash([]);
 
@@ -524,7 +570,7 @@ class HexGrid {
             ctx.font = `bold ${Math.max(10, this.size * 0.4)}px 'Segoe UI', sans-serif`;
             const tw = ctx.measureText(label).width;
             const bx = x - tw / 2 - 5, by = y - tr - 20, bw = tw + 10, bh = 18;
-            ctx.globalAlpha = 1;
+            ctx.globalAlpha = opacity;
             ctx.fillStyle = 'rgba(10,14,23,0.85)';
             ctx.strokeStyle = '#ffd54f';
             ctx.lineWidth = 1 / this.zoom;

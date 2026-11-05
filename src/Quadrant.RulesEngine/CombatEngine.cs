@@ -61,7 +61,9 @@ public sealed class CombatEngine
         defender.InitializeCrewRoles();
         if (!defender.CrewRoles.Contains("Gunner")) return [];
         return defender.Weapons.Select((weapon, index) => (weapon, index))
-            .Where(x => x.weapon.Type == WeaponType.DirectFire && defender.HasWeaponUses(x.index))
+            .Where(x => x.weapon.Type == WeaponType.DirectFire && defender.HasWeaponUses(x.index) &&
+                LinkedMountIndices(defender, x.index).All(i => defender.HasWeaponUses(i)))
+            .Where(x => !EarlierLinkedMount(defender, x.index))
             .Select(x => x.index).ToList();
     }
 
@@ -75,8 +77,9 @@ public sealed class CombatEngine
             if (!GetFreeAttackWeapons().Contains(wi)) return "That weapon cannot be used for this free attack.";
             int gunner = gunnerIndex ?? defender.CrewRoles.IndexOf("Gunner");
             if (gunner < 0 || gunner >= defender.CrewRoles.Count || defender.CrewRoles[gunner] != "Gunner") return "Select a gunner for the free attack.";
-            defender.ConsumeWeaponUse(wi);
-            var weapon = defender.Weapons[wi];
+            var mountIndices = LinkedMountIndices(defender, wi);
+            var weapon = CombineLinkedWeapon(defender, wi, mountIndices);
+            foreach (var index in mountIndices) defender.ConsumeWeaponUse(index);
             int bonus = defender.CrewBonus(gunner, "gunnery", "Gunner") + defender.Systems.GetActionPenalty(ShipSystem.WeaponsArray) + defender.Systems.PowerCoreGlobalPenalty;
             int roll = _dice.RollD20();
             int total = roll + bonus;
@@ -460,6 +463,8 @@ public sealed class CombatEngine
             return null;
         }
         var weapon = ship.Weapons[action.WeaponIndex];
+        var mountIndices = LinkedMountIndices(ship, action.WeaponIndex);
+        var attackWeapon = CombineLinkedWeapon(ship, action.WeaponIndex, mountIndices);
 
         var target = _state.GetShip(action.TargetShipId);
         if (target is null || target.IsDestroyed || target.TeamId == ship.TeamId)
@@ -471,6 +476,12 @@ public sealed class CombatEngine
         int targetRange = ship.Position.DistanceTo(target.Position);
         double targetAngle = ship.AngleFromFacing(target.Position);
         if (!weapon.CanTarget(targetRange, targetAngle)) return null;
+        if (mountIndices.Any(i => !ship.HasWeaponUses(i)))
+        {
+            LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId, $"{ShipLogName(ship)}'s {attackWeapon.Name} is out of ammunition."));
+            return null;
+        }
+        if (mountIndices.Any(i => _firedWeapons.Contains((ship.InstanceId, i)))) return null;
         var arcKey = (ship.InstanceId, target.InstanceId);
         bool sharedBoundary = IsSharedArcBoundary(targetAngle);
         if (sharedBoundary)
@@ -503,8 +514,11 @@ public sealed class CombatEngine
             LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId, $"{weapon.Name} has no projectile speed configured."));
             return null;
         }
-        if (!_firedWeapons.Add((ship.InstanceId, action.WeaponIndex))) return null;
-        ship.ConsumeWeaponUse(action.WeaponIndex);
+        foreach (int index in mountIndices)
+        {
+            if (!_firedWeapons.Add((ship.InstanceId, index))) return null;
+            ship.ConsumeWeaponUse(index);
+        }
 
         int? crewBonus = actingCrew >= 0 ? ship.CrewBonus(actingCrew, "gunnery", "Gunner") : null;
         if (crewBonus.HasValue)
@@ -515,7 +529,7 @@ public sealed class CombatEngine
             else ship.CrewActionsUsed.Add(actingCrew);
             ship.GunnerActionTaken = true;
         }
-        var check = CombatResolver.RollAttack(ship, target, weapon, _dice, gunnerBonus: crewBonus, rollDamage: false);
+        var check = CombatResolver.RollAttack(ship, target, attackWeapon, _dice, gunnerBonus: crewBonus, rollDamage: false);
         if (!check.IsHit)
         {
             LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId,
@@ -532,7 +546,7 @@ public sealed class CombatEngine
             {
                 Id = $"projectile-{Guid.NewGuid():N}", Name = ProjectileDisplayName(weapon.Name), TeamId = ship.TeamId,
                 OwnerShipId = ship.InstanceId, TargetShipId = target.InstanceId,
-                Position = ship.Position, Facing = ship.Facing,
+                Position = ship.Position, Facing = TrackingLaunchFacing(ship, target, weapon),
                 Speed = weapon.ProjectileSpeed, GunnerBonus = (crewBonus ?? CombatResolver.ComputeGunnerBonus(ship)) + (snapShot ? 2 : 0), Weapon = weapon
             };
             _pendingLaunches.Add((projectile, check));
@@ -540,7 +554,7 @@ public sealed class CombatEngine
         }
 
         ShipSystem? targetedSystem = _targetedSystems.Remove((ship.InstanceId, target.InstanceId), out var chosenSystem) ? chosenSystem : null;
-        _pendingHits.Add((ship, target, weapon, check, target.QuadrantOf(ship.Position), targetedSystem));
+        _pendingHits.Add((ship, target, attackWeapon, check, target.QuadrantOf(ship.Position), targetedSystem));
         return check with { Description = $"{check.Description} Damage effects apply at the end of Gunnery." };
     }
 
@@ -775,15 +789,16 @@ public sealed class CombatEngine
                 return "Choose a source quadrant, a different destination quadrant, and a positive number of shield points.";
             int[] values = [shields.Forward, shields.Starboard, shields.Aft, shields.Port];
             if (values[(int)from] - action.Amount < minimum)
-                return $"Each quadrant must retain at least {minimum} shield points after rebalancing.";
+                return $"The source quadrant must retain at least {minimum} shield points after rebalancing.";
             values[(int)from] -= action.Amount;
             values[(int)to] += action.Amount;
             allocation = new ShieldAllocation(values[0], values[1], values[2], values[3]);
         }
-        if (allocation.Forward < minimum || allocation.Starboard < minimum ||
-            allocation.Aft < minimum || allocation.Port < minimum ||
-            (long)allocation.Forward + allocation.Starboard + allocation.Aft + allocation.Port != totalShields)
-            return $"Reallocate all {totalShields} shield points, with at least {minimum} in each quadrant.";
+        if ((long)allocation.Forward + allocation.Starboard + allocation.Aft + allocation.Port != totalShields)
+            return $"Reallocate all {totalShields} shield points.";
+        if (action.BalanceEvenly && (allocation.Forward < minimum || allocation.Starboard < minimum ||
+            allocation.Aft < minimum || allocation.Port < minimum))
+            return $"Even distribution requires at least {minimum} shield points in each quadrant.";
 
         ship.CrewActionsUsed.Add(action.CrewIndex);
         int balanceBonus = GetScienceOfficerCheckBonus(ship, action.CrewIndex);
@@ -1051,8 +1066,11 @@ public sealed class CombatEngine
         for (int wi = 0; wi < ship.Weapons.Count; wi++)
         {
             if (_firedWeapons.Contains((ship.InstanceId, wi))) continue;
+            if (EarlierLinkedMount(ship, wi)) continue;
             if (!ship.HasWeaponUses(wi)) continue;
             var weapon = ship.Weapons[wi];
+            var mountIndices = LinkedMountIndices(ship, wi);
+            if (mountIndices.Any(i => !ship.HasWeaponUses(i) || _firedWeapons.Contains((ship.InstanceId, i)))) continue;
             if (weapon.Type == WeaponType.Tracking && weapon.ProjectileSpeed <= 0) continue;
             foreach (var target in _state.ActiveShips())
             {
@@ -1073,7 +1091,7 @@ public sealed class CombatEngine
                 int effectiveBonus = bonus == int.MinValue ? bonus : bonus + rangePenalty;
                 int hitChance = CombatResolver.HitChancePercent(effectiveBonus, defenseValue);
                 bool choiceRequired = choices.Count > 1 && !_targetArcChoices.ContainsKey((ship.InstanceId, target.InstanceId));
-                options.Add(new TargetOption(weapon.Name, target.InstanceId, range, hitChance, wi, rangePenalty, weapon.Arc, choiceRequired, choices));
+                options.Add(new TargetOption(CombineLinkedWeapon(ship, wi, mountIndices).Name, target.InstanceId, range, hitChance, wi, rangePenalty, weapon.Arc, choiceRequired, choices));
             }
         }
         return options;
@@ -1082,6 +1100,61 @@ public sealed class CombatEngine
     // ────────────────────────────────────────────────
     //  Internal helpers
     // ────────────────────────────────────────────────
+
+    private static List<int> LinkedMountIndices(ShipInstance ship, int weaponIndex)
+    {
+        var weapon = ship.Weapons[weaponIndex];
+        if (weapon.Type != WeaponType.DirectFire || string.IsNullOrWhiteSpace(weapon.LinkedGroup))
+            return [weaponIndex];
+
+        var matching = ship.Weapons.Select((candidate, index) => (candidate, index))
+            .Where(x => x.candidate.Type == WeaponType.DirectFire &&
+                x.candidate.LinkedGroup == weapon.LinkedGroup && x.candidate.Arc == weapon.Arc &&
+                x.candidate.Name == weapon.Name && x.candidate.Damage == weapon.Damage &&
+                x.candidate.MinRange == weapon.MinRange && x.candidate.RangeIncrement == weapon.RangeIncrement &&
+                x.candidate.LimitedFireUses == weapon.LimitedFireUses)
+            .Select(x => x.index).ToList();
+        return matching.Count > 1 ? matching : [weaponIndex];
+    }
+
+    private static bool EarlierLinkedMount(ShipInstance ship, int weaponIndex)
+        => LinkedMountIndices(ship, weaponIndex).First() != weaponIndex;
+
+    private static Weapon CombineLinkedWeapon(ShipInstance ship, int weaponIndex, IReadOnlyList<int> mountIndices)
+    {
+        var weapon = ship.Weapons[weaponIndex];
+        if (mountIndices.Count < 2) return weapon;
+        return weapon with
+        {
+            Name = $"{weapon.Name} battery ({mountIndices.Count})",
+            Damage = weapon.Damage with
+            {
+                DiceCount = weapon.Damage.DiceCount * mountIndices.Count,
+                FlatBonus = weapon.Damage.FlatBonus * mountIndices.Count
+            }
+        };
+    }
+
+    private static Facing TrackingLaunchFacing(ShipInstance attacker, ShipInstance target, Weapon weapon)
+    {
+        int shipFacing = (int)attacker.Facing;
+        IEnumerable<int> possibleFacings = weapon.Arc switch
+        {
+            FiringArc.Forward => [shipFacing],
+            FiringArc.Starboard => [(shipFacing + 1) % Hex.DirectionCount, (shipFacing + 2) % Hex.DirectionCount],
+            FiringArc.Aft => [(shipFacing + 3) % Hex.DirectionCount],
+            FiringArc.Port => [(shipFacing + 4) % Hex.DirectionCount, (shipFacing + 5) % Hex.DirectionCount],
+            FiringArc.AllArcs => Enumerable.Range(0, Hex.DirectionCount),
+            _ => [shipFacing]
+        };
+
+        int directionToTarget = attacker.Position.DirectionTo(target.Position);
+        return (Facing)possibleFacings.MinBy(facing =>
+        {
+            int difference = Math.Abs(facing - directionToTarget);
+            return Math.Min(difference, Hex.DirectionCount - difference);
+        });
+    }
 
     private string ShipLogName(ShipInstance ship)
         => $"{_state.DisplayName(ship)} (Team {ship.TeamId + 1})";
