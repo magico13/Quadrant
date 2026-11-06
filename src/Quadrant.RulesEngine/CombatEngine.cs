@@ -591,6 +591,23 @@ public sealed class CombatEngine
     }
 
     /// <summary>Attempt Back Off and move directly aft without changing facing.</summary>
+    private static int StuntBonus(ShipInstance ship, int pilot) =>
+        ship.CrewBonus(pilot, "piloting", "Pilot") + ship.SpeedPilotingAdjustment +
+        ship.Systems.GetActionPenalty(ShipSystem.Engines) + ship.Systems.PowerCoreGlobalPenalty;
+
+    private static int StuntDc(ShipInstance ship, string stunt) =>
+        (int)Math.Floor((stunt == "Back Off" ? 10 : 15) + 1.5 * ship.Definition.Tier);
+
+    public int? GetStuntSuccessChance(ShipInstance ship, string stunt)
+    {
+        ship.InitializeCrewRoles();
+        int pilot = ship.CrewRoles.IndexOf("Pilot");
+        if (pilot < 0 || ship.CrewActionsUsed.Contains(pilot) ||
+            ship.Systems.GetEffective(ShipSystem.Engines) is SystemCondition.Malfunctioning or SystemCondition.Wrecked)
+            return null;
+        return Math.Clamp(21 - StuntDc(ship, stunt) + StuntBonus(ship, pilot), 0, 20) * 5;
+    }
+
     public MoveValidationResult StartStunt(string stunt)
     {
         if (HasPendingFreeAttack) return MoveValidationResult.Fail("Resolve the free attack first.");
@@ -613,8 +630,8 @@ public sealed class CombatEngine
 
         int penalty = ship.Systems.GetActionPenalty(ShipSystem.Engines);
         int roll = _dice.RollD20();
-        int bonus = ship.CrewBonus(pilot, "piloting", "Pilot") + ship.SpeedPilotingAdjustment + (penalty == int.MinValue ? 0 : penalty) + ship.Systems.PowerCoreGlobalPenalty;
-        int dc = (int)Math.Floor((stunt == "Back Off" ? 10 : 15) + 1.5 * ship.Definition.Tier);
+        int bonus = StuntBonus(ship, pilot);
+        int dc = StuntDc(ship, stunt);
         int total = roll + bonus;
         bool failedByFive = penalty == int.MinValue || total <= dc - 5;
         bool failed = penalty == int.MinValue || total < dc;

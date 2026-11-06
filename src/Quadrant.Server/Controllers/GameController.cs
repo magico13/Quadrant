@@ -168,6 +168,7 @@ public class GameController : ControllerBase
                         scienceBonus = role == "Science Officer" ? engine.GetScienceOfficerCheckBonus(s, i) : (int?)null };
                 }),
                 helmAction = s.Definition.Crew.Count == 0 || s.CrewRoles.Contains("Pilot") ? "Pilot" : s.AvailableMinorCrew() >= 0 ? "Glide" : "None",
+                stuntChances = new { backOff = engine.GetStuntSuccessChance(s, "Back Off"), flipAndBurn = engine.GetStuntSuccessChance(s, "Flip and Burn") },
                 gunneryAction = s.Definition.Crew.Count == 0 || s.AvailableGunner() >= 0 ? "Gunner" : !s.GunnerActionTaken && s.AvailableMinorCrew() >= 0 ? "Snap Shot" : "None",
                 crewShotsRemaining = s.RemainingGunneryActions(),
                 weapons = s.Weapons.Select((w, i) =>

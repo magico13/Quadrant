@@ -493,9 +493,9 @@ function renderHelm() {
                 ? `<div class="hint">${state.pendingStunt}: choose a highlighted destination to preview the result.</div>${(state.options?.items || []).some(m => m.position.q === actor.q && m.position.r === actor.r) ? '<button class="btn btn-ghost" id="btn-stunt-hold">Preview current hex</button>' : ''}`
                 : `<div class="hint">Click a highlighted hex to preview a move.${actor.helmAction === 'Pilot' ? ' Click your own ship to turn in place.' : ''}</div>
                    <button class="btn btn-ghost" id="btn-hold">Hold Position</button>
-                   ${actor.helmAction === 'Pilot' ? '<div class="detail-section">Stunts</div><button class="btn btn-ghost" data-stunt="Back Off">Back Off</button> <button class="btn btn-ghost" data-stunt="Flip and Burn">Flip and Burn</button>' : ''}`}`;
+                   ${actor.stuntChances?.backOff != null ? `<div class="detail-section">Stunts</div><button class="btn btn-ghost" data-stunt="Back Off">Back Off (${actor.stuntChances.backOff}%)</button> <button class="btn btn-ghost" data-stunt="Flip and Burn">Flip and Burn (${actor.stuntChances.flipAndBurn}%)</button>` : ''}`}`;
 
-    const scienceShips = state.ships.filter(ship => !ship.isDestroyed && !ship.isDisabled &&
+    const scienceShips = state.ships.filter(ship => ship.id === actor.id && !ship.isDestroyed && !ship.isDisabled &&
         ((ship.crew || []).some(crew => crew.role === 'Science Officer' && !crew.actionUsed) || (ship.targetedSystems || []).length > 0));
     if (scienceShips.length) {
         actionPanel.innerHTML += `<div class="detail-section">Science Officer Actions</div>
