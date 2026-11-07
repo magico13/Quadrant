@@ -165,7 +165,9 @@ public class GameController : ControllerBase
                     };
                     return new { primaryRole = c.Role, role, ranks = c.Ranks, skills = c.Skills, actionUsed = s.CrewActionsUsed.Contains(i),
                         roleBonus = skill is null ? (int?)null : s.CrewBonus(i, skill, role),
-                        scienceBonus = role == "Science Officer" ? engine.GetScienceOfficerCheckBonus(s, i) : (int?)null };
+                        scienceBonus = role == "Science Officer" ? engine.GetScienceOfficerCheckBonus(s, i) : (int?)null,
+                        engineeringChances = role == "Engineer" ? new { divert = engine.GetEngineeringSuccessChance(s, i, "Divert"), hold = engine.GetEngineeringSuccessChance(s, i, "Hold It Together") } : null,
+                        scienceChances = role == "Science Officer" ? new { balance = engine.GetScienceSuccessChance(s, i), targets = state.Ships.Where(t => t.TeamId != s.TeamId && !t.IsDestroyed).ToDictionary(t => t.InstanceId, t => engine.GetScienceSuccessChance(s, i, t)) } : null };
                 }),
                 helmAction = s.Definition.Crew.Count == 0 || s.CrewRoles.Contains("Pilot") ? "Pilot" : s.AvailableMinorCrew() >= 0 ? "Glide" : "None",
                 stuntChances = new { backOff = engine.GetStuntSuccessChance(s, "Back Off"), flipAndBurn = engine.GetStuntSuccessChance(s, "Flip and Burn") },

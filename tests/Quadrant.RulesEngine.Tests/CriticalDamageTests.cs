@@ -6,6 +6,30 @@ namespace Quadrant.RulesEngine.Tests;
 public class CriticalDamageTests
 {
     [Fact]
+    public void TargetedCriticalOnWreckedEnginesMovesToPowerCore()
+    {
+        var target = MakeShip(Facing.West, new Hex(1, 0));
+        target.Shields.Forward = 0;
+        for (int i = 0; i < 3; i++) target.Systems.ApplyCritical(ShipSystem.Engines);
+        var result = CombatResolver.ApplyDamage(target, Q.Forward, 1, 20, new ScriptedDice(20, 70), ShipSystem.Engines);
+        Assert.Equal(ShipSystem.PowerCore, Assert.Single(result.CriticalEffects).System);
+        Assert.Equal(SystemCondition.Glitching, target.Systems.Get(ShipSystem.PowerCore));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void CriticalPastWreckedPowerCoreReportsCrewInjury(bool targeted)
+    {
+        var target = MakeShip(Facing.West, new Hex(1, 0));
+        target.Shields.Forward = 0;
+        for (int i = 0; i < 3; i++) target.Systems.ApplyCritical(ShipSystem.PowerCore);
+        var result = CombatResolver.ApplyDamage(target, Q.Forward, 1, 20, new ScriptedDice(20, 90), targeted ? ShipSystem.PowerCore : null);
+        Assert.Null(Assert.Single(result.CriticalEffects).System);
+        Assert.Contains("crew injury requires manual resolution (1 damage, DC 20 Reflex for half)", result.Description);
+    }
+
+    [Fact]
     public void NaturalTwentyAndTwoThresholdCrossingsCauseThreeCriticalEffects()
     {
         var target = MakeShip(Facing.West, new Hex(1, 0), criticalThreshold: 7);

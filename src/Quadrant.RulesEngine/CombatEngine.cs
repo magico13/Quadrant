@@ -8,9 +8,9 @@ public sealed record CombatEvent(string Phase, string ShipId, string Message)
     public static CombatEvent Info(string phase, string shipId, string msg) => new(phase, shipId, msg);
 }
 
-public sealed record PendingHitSnapshot(string AttackerId, string TargetId, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant, ShipSystem? TargetedSystem = null);
-public sealed record PendingLaunchSnapshot(TrackingProjectile Projectile, AttackCheckResult Check);
-public sealed record PendingProjectileImpactSnapshot(TrackingProjectile Projectile, int Roll, int CheckBonus, int Defense, Hex ImpactFrom);
+public sealed record PendingHitSnapshot(string AttackerId, string TargetId, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant, ShipSystem? TargetedSystem = null, long Order = 0);
+public sealed record PendingLaunchSnapshot(TrackingProjectile Projectile, AttackCheckResult Check, long Order = 0);
+public sealed record PendingProjectileImpactSnapshot(TrackingProjectile Projectile, int Roll, int CheckBonus, int Defense, Hex ImpactFrom, long Order = 0);
 public sealed record PointDefenseUsedSnapshot(string ShipId, int WeaponIndex);
 public sealed record PointDefenseWeaponOption(int WeaponIndex, string Name, int Bonus);
 public sealed record PointDefenseMissileOption(string ProjectileId, string Name, int Speed, IReadOnlyList<PointDefenseWeaponOption> Weapons);
@@ -45,13 +45,14 @@ public sealed class CombatEngine
 {
     private readonly GameState _state;
     private readonly IDiceRoller _dice;
-    private readonly List<(ShipInstance Attacker, ShipInstance Target, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant, ShipSystem? TargetedSystem)> _pendingHits = [];
-    private readonly List<(TrackingProjectile Projectile, AttackCheckResult Check)> _pendingLaunches = [];
+    private readonly List<(ShipInstance Attacker, ShipInstance Target, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant, ShipSystem? TargetedSystem, long Order)> _pendingHits = [];
+    private readonly List<(TrackingProjectile Projectile, AttackCheckResult Check, long Order)> _pendingLaunches = [];
     private readonly List<PendingProjectileImpactSnapshot> _pendingProjectileImpacts = [];
     private readonly HashSet<(string ShipId, int WeaponIndex)> _firedWeapons = [];
     private readonly HashSet<(string ShipId, int WeaponIndex)> _pointDefenseUsed = [];
     private readonly HashSet<string> _passedPointDefenseProjectiles = [];
     private bool _gunneryResolutionPrepared;
+    private long _nextAttackOrder;
     private readonly Dictionary<(string ShipId, string TargetId), FiringArc> _targetArcChoices = [];
     private readonly Dictionary<(string ShipId, string TargetId), ShipSystem> _targetedSystems = [];
     private List<MoveOption>? _stuntMoves;
@@ -167,8 +168,8 @@ public sealed class CombatEngine
     public GameState State => _state;
 
     public CombatEngineSnapshot CaptureSnapshot() => new(
-        _pendingHits.Select(h => new PendingHitSnapshot(h.Attacker.InstanceId, h.Target.InstanceId, h.Weapon, h.Check, h.Quadrant, h.TargetedSystem)).ToList(),
-        _pendingLaunches.Select(l => new PendingLaunchSnapshot(l.Projectile, l.Check)).ToList(),
+        _pendingHits.Select(h => new PendingHitSnapshot(h.Attacker.InstanceId, h.Target.InstanceId, h.Weapon, h.Check, h.Quadrant, h.TargetedSystem, h.Order)).ToList(),
+        _pendingLaunches.Select(l => new PendingLaunchSnapshot(l.Projectile, l.Check, l.Order)).ToList(),
         _firedWeapons.Select(w => new FiredWeaponSnapshot(w.ShipId, w.WeaponIndex)).ToList(),
         _targetArcChoices.Select(a => new TargetArcSnapshot(a.Key.ShipId, a.Key.TargetId, a.Value)).ToList(),
         _stuntMoves, PendingStunt, _committedMove, _moveStep, _lastUnoccupied, _lastUnoccupiedFacing,
@@ -182,9 +183,10 @@ public sealed class CombatEngine
     {
         foreach (var h in snapshot.PendingHits)
             _pendingHits.Add((_state.GetShip(h.AttackerId) ?? throw new InvalidDataException("Missing attacker in saved game."),
-                _state.GetShip(h.TargetId) ?? throw new InvalidDataException("Missing target in saved game."), h.Weapon, h.Check, h.Quadrant, h.TargetedSystem));
-        foreach (var l in snapshot.PendingLaunches) _pendingLaunches.Add((l.Projectile, l.Check));
+                _state.GetShip(h.TargetId) ?? throw new InvalidDataException("Missing target in saved game."), h.Weapon, h.Check, h.Quadrant, h.TargetedSystem, h.Order));
+        foreach (var l in snapshot.PendingLaunches) _pendingLaunches.Add((l.Projectile, l.Check, l.Order));
         _pendingProjectileImpacts.AddRange(snapshot.PendingImpacts ?? []);
+        _nextAttackOrder = _pendingHits.Select(h => h.Order).Concat(_pendingLaunches.Select(l => l.Order)).Concat(_pendingProjectileImpacts.Select(i => i.Order)).DefaultIfEmpty(0).Max();
         foreach (var w in snapshot.FiredWeapons) _firedWeapons.Add((w.ShipId, w.WeaponIndex));
         foreach (var w in snapshot.PointDefenseUsed ?? []) _pointDefenseUsed.Add((w.ShipId, w.WeaponIndex));
         foreach (var id in snapshot.PassedPointDefenseProjectiles ?? []) _passedPointDefenseProjectiles.Add(id);
@@ -537,12 +539,11 @@ public sealed class CombatEngine
                 Position = ship.Position, Facing = TrackingLaunchFacing(ship, target, weapon),
                 Speed = weapon.ProjectileSpeed, GunnerBonus = (crewBonus ?? CombatResolver.ComputeGunnerBonus(ship)) + (snapShot ? 2 : 0), Weapon = weapon
             };
-            _pendingLaunches.Add((projectile, check));
+            _pendingLaunches.Add((projectile, check, ++_nextAttackOrder));
             return check with { Description = $"{check.Description} Missile acquired; it moves at the end of Gunnery." };
         }
 
-        ShipSystem? targetedSystem = _targetedSystems.Remove((ship.InstanceId, target.InstanceId), out var chosenSystem) ? chosenSystem : null;
-        _pendingHits.Add((ship, target, attackWeapon, check, target.QuadrantOf(ship.Position), targetedSystem));
+        _pendingHits.Add((ship, target, attackWeapon, check, target.QuadrantOf(ship.Position), null, ++_nextAttackOrder));
         return check with { Description = $"{check.Description} Damage effects apply at the end of Gunnery." };
     }
 
@@ -668,6 +669,29 @@ public sealed class CombatEngine
     // ────────────────────────────────────────────────
     //  Engineering phase
     // ────────────────────────────────────────────────
+
+    private static int CheckChance(int bonus, int dc) => Math.Clamp(21 - dc + bonus, 0, 20) * 5;
+
+    public int GetEngineeringSuccessChance(ShipInstance ship, int crewIndex, string action)
+    {
+        int penalty = action == "Hold It Together" ? 0 : ship.Systems.GetActionPenalty(ShipSystem.PowerCore);
+        if (penalty == int.MinValue) return 0;
+        int dc = (int)Math.Floor((action == "Divert" ? 10 : 15) + 1.5 * ship.Definition.Tier);
+        return CheckChance(ship.CrewBonus(crewIndex, "engineering", "Engineer") + penalty, dc);
+    }
+
+    public int GetScienceSuccessChance(ShipInstance ship, int crewIndex, ShipInstance? target = null)
+    {
+        int penalty = ship.Systems.GetActionPenalty(ShipSystem.Sensors);
+        if (penalty == int.MinValue || (target is not null &&
+            ship.Systems.GetEffective(ShipSystem.Sensors) is SystemCondition.Malfunctioning or SystemCondition.Wrecked)) return 0;
+        int range = target is null ? 0 : ship.Position.DistanceTo(target.Position);
+        int sensorRange = ship.Definition.SensorRangeHexes;
+        int rangePenalty = target is not null && sensorRange > 0 ? -2 * Math.Max(0, (range + sensorRange - 1) / sensorRange - 1) : 0;
+        int dc = target is null ? (int)Math.Floor(10 + 1.5 * ship.Definition.Tier)
+            : (int)Math.Floor(5 + 1.5 * target.Definition.Tier) + target.Definition.Countermeasures;
+        return CheckChance(GetScienceOfficerCheckBonus(ship, crewIndex) + penalty + ship.Systems.PowerCoreGlobalPenalty + rangePenalty, dc);
+    }
 
     /// <summary>Attempt one engineering action, consuming that engineer's action even on failure.</summary>
     public string? ApplyEngineering(EngineerAction action)
@@ -1184,7 +1208,7 @@ public sealed class CombatEngine
             ? weaponName[..^" Launcher".Length]
             : weaponName;
 
-    private void ResolveProjectile(TrackingProjectile projectile, int roll, int checkBonus, int defense)
+    private void ResolveProjectile(TrackingProjectile projectile, int roll, int checkBonus, int defense, long order)
     {
         var target = _state.GetShip(projectile.TargetShipId);
         if (target is null)
@@ -1215,7 +1239,7 @@ public sealed class CombatEngine
 
         if (projectile.Position == target.Position)
         {
-            _pendingProjectileImpacts.Add(new PendingProjectileImpactSnapshot(projectile, roll, checkBonus, defense, impactFrom));
+            _pendingProjectileImpacts.Add(new PendingProjectileImpactSnapshot(projectile, roll, checkBonus, defense, impactFrom, order));
         }
         else
         {
@@ -1236,12 +1260,12 @@ public sealed class CombatEngine
                 _state.Projectiles.RemoveAll(candidate => candidate.Id == projectile.Id);
                 continue;
             }
-            ResolveProjectile(projectile, _dice.RollD20(), projectile.GunnerBonus, target.CurrentTL);
+            ResolveProjectile(projectile, _dice.RollD20(), projectile.GunnerBonus, target.CurrentTL, ++_nextAttackOrder);
         }
-        foreach (var (projectile, check) in _pendingLaunches)
+        foreach (var (projectile, check, order) in _pendingLaunches)
         {
             _state.Projectiles.Add(projectile);
-            ResolveProjectile(projectile, check.Roll, check.Modifier, check.DefenseValue);
+            ResolveProjectile(projectile, check.Roll, check.Modifier, check.DefenseValue, order);
         }
         _pendingLaunches.Clear();
         _gunneryResolutionPrepared = true;
@@ -1351,37 +1375,47 @@ public sealed class CombatEngine
 
     private void FinishGunneryResolution()
     {
-        foreach (var impact in _pendingProjectileImpacts.ToList())
+        // A newly launched projectile occupies its attack's place only if it reaches
+        // the target this round. Existing projectiles impact after this round's shots.
+        foreach (var entry in _pendingHits.Select((h, i) => (h.Order, Index: i, Impact: (PendingProjectileImpactSnapshot?)null))
+            .Concat(_pendingProjectileImpacts.Select(i => (i.Order, Index: -1, Impact: (PendingProjectileImpactSnapshot?)i)))
+            .OrderBy(e => e.Order))
         {
-            var projectile = impact.Projectile;
-            var target = _state.GetShip(projectile.TargetShipId);
-            if (target is null || target.IsDestroyed) continue;
-            ShipSystem? targetedSystem = _targetedSystems.Remove((projectile.OwnerShipId, target.InstanceId), out var chosenSystem) ? chosenSystem : null;
-            bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
-            var result = CombatResolver.ResolveProjectileImpact(projectile, target, _dice, impact.Roll, impact.CheckBonus, impact.Defense, impact.ImpactFrom,
-                _state.GetShip(projectile.OwnerShipId)?.DivertWeapons == true, targetedSystem);
-            string ownerName = _state.GetShip(projectile.OwnerShipId) is { } owner ? ShipLogName(owner) : $"Team {projectile.TeamId + 1}";
-            LastEvents.Add(new CombatEvent("Gunnery", projectile.OwnerShipId,
-                $"{ownerName}'s {ProjectileLogName(projectile)} hits {ShipLogName(target)}: {result.Description}"));
-            LogShipStatusChange(target, wasDisabled, wasDestroyed, "Gunnery");
-            _state.Projectiles.RemoveAll(candidate => candidate.Id == projectile.Id);
+            if (entry.Impact is { } impact)
+            {
+                var projectile = impact.Projectile;
+                var target = _state.GetShip(projectile.TargetShipId);
+                if (target is null || target.IsDestroyed) continue;
+                ShipSystem? targetedSystem = _targetedSystems.Remove((projectile.OwnerShipId, target.InstanceId), out var chosenSystem) ? chosenSystem : null;
+                bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
+                var result = CombatResolver.ResolveProjectileImpact(projectile, target, _dice, impact.Roll, impact.CheckBonus, impact.Defense, impact.ImpactFrom,
+                    _state.GetShip(projectile.OwnerShipId)?.DivertWeapons == true, targetedSystem);
+                string ownerName = _state.GetShip(projectile.OwnerShipId) is { } owner ? ShipLogName(owner) : $"Team {projectile.TeamId + 1}";
+                LastEvents.Add(new CombatEvent("Gunnery", projectile.OwnerShipId,
+                    $"{ownerName}'s {ProjectileLogName(projectile)} hits {ShipLogName(target)}: {result.Description}"));
+                LogShipStatusChange(target, wasDisabled, wasDestroyed, "Gunnery");
+                _state.Projectiles.RemoveAll(candidate => candidate.Id == projectile.Id);
+            }
+            else
+            {
+                var (attacker, target, weapon, check, quadrant, savedTargetedSystem, _) = _pendingHits[entry.Index];
+                ShipSystem? targetedSystem = savedTargetedSystem ?? (_targetedSystems.Remove((attacker.InstanceId, target.InstanceId), out var chosenSystem) ? chosenSystem : null);
+                int rolledDamage = weapon.Damage.Roll(_dice, attacker.DivertWeapons);
+                bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
+                var damage = CombatResolver.ApplyDamage(target, quadrant, rolledDamage, check.Roll, _dice, targetedSystem);
+                LastEvents.Add(new CombatEvent("Gunnery", attacker.InstanceId,
+                    $"{ShipLogName(target)} takes damage from {ShipLogName(attacker)}'s {weapon.Name}: {damage.Description}."));
+                LogShipStatusChange(target, wasDisabled, wasDestroyed, "Gunnery");
+            }
         }
         _pendingProjectileImpacts.Clear();
-        foreach (var (attacker, target, weapon, check, quadrant, targetedSystem) in _pendingHits)
-        {
-            int rolledDamage = weapon.Damage.Roll(_dice, attacker.DivertWeapons);
-            bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
-            var damage = CombatResolver.ApplyDamage(target, quadrant, rolledDamage, check.Roll, _dice, targetedSystem);
-            LastEvents.Add(new CombatEvent("Gunnery", attacker.InstanceId,
-                $"{ShipLogName(target)} takes damage from {ShipLogName(attacker)}'s {weapon.Name}: {damage.Description}."));
-            LogShipStatusChange(target, wasDisabled, wasDestroyed, "Gunnery");
-        }
         _pendingHits.Clear();
         _firedWeapons.Clear();
         _targetArcChoices.Clear();
         _pointDefenseUsed.Clear();
         _passedPointDefenseProjectiles.Clear();
         _gunneryResolutionPrepared = false;
+        _nextAttackOrder = 0;
         CheckVictory();
         if (!_state.IsComplete)
         {

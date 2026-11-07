@@ -4,6 +4,34 @@ namespace Quadrant.RulesEngine.Tests;
 
 public class TrackingProjectileTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ImmediateMissileImpactAndDirectHitResolveInAttackOrderAfterRestore(bool missileFirst)
+    {
+        var missile = new Weapon { Name = "Torpedo Launcher", Arc = FiringArc.Forward, Type = WeaponType.Tracking,
+            ProjectileSpeed = 2, RangeIncrement = 10, Damage = DamageExpression.From("1") };
+        var cannon = new Weapon { Name = "Cannon", Arc = FiringArc.Forward, RangeIncrement = 10, Damage = DamageExpression.From("1") };
+        var attackerDefinition = new ShipDefinition { Id = "attacker", Name = "Attacker", HullPoints = 20,
+            Shields = new QuadrantShields(), Weapons = [missile, cannon], GunnerBaseAttack = 10 };
+        var targetDefinition = new ShipDefinition { Id = "target", Name = "Target", HullPoints = 20,
+            Shields = new QuadrantShields(), BaseAC = 10, BaseTL = 10 };
+        var state = new GameState { GameId = "test", RoomCode = "test", Phase = CombatPhase.Gunnery, ActionOrder = ["attacker", "target"] };
+        state.Ships.Add(attackerDefinition.Instantiate("attacker", new Hex(0, 0), Facing.East, 0));
+        state.Ships.Add(targetDefinition.Instantiate("target", new Hex(1, 0), Facing.West, 1));
+        var engine = new CombatEngine(state, new CountingDice());
+        Assert.True(engine.ApplyFire(new FireAction(missileFirst ? 0 : 1, "target"))!.IsHit);
+        Assert.True(engine.ApplyFire(new FireAction(missileFirst ? 1 : 0, "target"))!.IsHit);
+        var restored = new CombatEngine(state, new CountingDice());
+        restored.RestoreSnapshot(engine.CaptureSnapshot());
+        restored.EndGunneryTurn();
+        restored.EndGunneryTurn();
+        var damageEvents = restored.LastEvents.Where(e => e.Message.Contains(" dmg (")).ToList();
+        Assert.Equal(2, damageEvents.Count);
+        Assert.Contains(missileFirst ? "Torpedo" : "Cannon", damageEvents[0].Message);
+        Assert.Contains(missileFirst ? "Cannon" : "Torpedo", damageEvents[1].Message);
+    }
+
     [Fact]
     public void MissileDamageIsRolledOnlyWhenItReachesItsTarget()
     {

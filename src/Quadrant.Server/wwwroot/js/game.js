@@ -424,8 +424,16 @@ function renderEngineering() {
         if (remembered && [...select.options].some(option => option.value === remembered))
             select.value = remembered;
         const shieldPanel = document.getElementById(`shield-allocation-${ship.id}`);
-        const update = () => { shieldPanel.hidden = select.value !== 'Divert|Shields'; };
+        const engineerSelect = document.getElementById(`engineer-${ship.id}`);
+        const button = actionPanel.querySelector(`[data-engineering-ship="${ship.id}"]`);
+        const update = () => {
+            shieldPanel.hidden = select.value !== 'Divert|Shields';
+            const chances = ship.crew[Number(engineerSelect.value)].engineeringChances;
+            const chance = select.value.startsWith('Divert|') ? chances.divert : chances.hold;
+            button.textContent = `Attempt Action (${chance}% success)`;
+        };
         select.addEventListener('change', update);
+        engineerSelect.addEventListener('change', update);
         select.addEventListener('change', () => localStorage.setItem(memoryKey, select.value));
         update();
         actionPanel.querySelector(`[data-engineering-ship="${ship.id}"]`).addEventListener('click', async () => {
@@ -551,11 +559,21 @@ function renderHelm() {
             const targetPanel = document.getElementById(`science-target-${ship.id}`);
             const modeSelect = document.getElementById(`science-balance-mode-${ship.id}`);
             const shiftPanel = document.getElementById(`science-shift-${ship.id}`);
-            actionSelect.addEventListener('change', () => {
+            const crewSelect = document.getElementById(`science-crew-${ship.id}`);
+            const enemySelect = document.getElementById(`science-enemy-${ship.id}`);
+            const button = actionPanel.querySelector(`[data-science-ship="${ship.id}"]`);
+            const updateChance = () => {
                 const targetMode = actionSelect.value === 'Target System';
                 balancePanel.hidden = targetMode;
                 targetPanel.hidden = !targetMode;
-            });
+                const chances = ship.crew[Number(crewSelect.value)].scienceChances;
+                const chance = targetMode ? chances.targets[enemySelect.value] : chances.balance;
+                button.textContent = `Attempt Science Action (${chance}% success)`;
+            };
+            actionSelect.addEventListener('change', updateChance);
+            crewSelect.addEventListener('change', updateChance);
+            enemySelect.addEventListener('change', updateChance);
+            updateChance();
             modeSelect.addEventListener('change', () => { shiftPanel.hidden = modeSelect.value === 'even'; });
             actionPanel.querySelector(`[data-science-ship="${ship.id}"]`).addEventListener('click', async () => {
                 const action = actionSelect.value;
@@ -699,8 +717,10 @@ function rangeBandHexes(ship, minR, maxR, arc, inc, broadArc = false) {
             const d = Hex.distance({ q: 0, r: 0 }, { q, r });
             if (d < minR || d > maxR) continue;
             const angle = angleFromFacing(ship.facing, q, r);
-            if (!arcCovers(arc, angle) && !(broadArc && broadArcCovers(arc, angle))) continue;
-            out.push({ q: ship.q + q, r: ship.r + r, band: Math.ceil(d / (inc || 1)) });
+            const inPrimaryArc = arcCovers(arc, angle);
+            if (!inPrimaryArc && !(broadArc && broadArcCovers(arc, angle))) continue;
+            // The adjacent-arc penalty equals one additional range increment.
+            out.push({ q: ship.q + q, r: ship.r + r, band: Math.ceil(d / (inc || 1)) + (inPrimaryArc ? 0 : 1) });
         }
     }
     return out;

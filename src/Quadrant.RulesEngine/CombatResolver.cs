@@ -24,7 +24,7 @@ public sealed record AttackCheckResult(
     bool IsHit, int Roll, int Modifier, int CheckTotal, int DefenseValue,
     string DefenseName, int DamageRolled, string Description);
 
-public sealed record CriticalDamageEffect(ShipSystem System, SystemCondition Condition);
+public sealed record CriticalDamageEffect(ShipSystem? System, SystemCondition? Condition);
 public sealed record DamageResolution(int ShieldDamage, int HullDamage, bool CriticalScored,
     ShipSystem? CriticalSystem, SystemCondition? NewCriticalCondition, string Description)
 {
@@ -100,11 +100,18 @@ public static class CombatResolver
         var effects = new List<CriticalDamageEffect>();
         for (int i = 0; i < criticalCount; i++)
         {
-            var system = i == 0 && targetedSystem is not null ? targetedSystem.Value : SystemFromPercent(dice.RollPercent(), target);
-            effects.Add(new CriticalDamageEffect(system, target.Systems.ApplyCritical(system)));
+            var system = i == 0 && targetedSystem is not null
+                ? NextAvailableSystem(targetedSystem.Value, target)
+                : SystemFromPercent(dice.RollPercent(), target);
+            effects.Add(system is { } available
+                ? new CriticalDamageEffect(available, target.Systems.ApplyCritical(available))
+                : new CriticalDamageEffect(null, null));
         }
         string description = $"{rawDamage} dmg ({shieldDamage} shield, {hullDamage} hull)";
-        foreach (var effect in effects) description += $". CRITICAL: {effect.System} → {effect.Condition}!";
+        foreach (var effect in effects)
+            description += effect.System is null
+                ? $". CRITICAL: crew injury requires manual resolution ({hullDamage} damage, DC 20 Reflex for half)!"
+                : $". CRITICAL: {effect.System} → {effect.Condition}!";
         return new DamageResolution(shieldDamage, hullDamage, effects.Count > 0, effects.FirstOrDefault()?.System,
             effects.FirstOrDefault()?.Condition, description) { CriticalEffects = effects };
     }
@@ -166,28 +173,18 @@ public static class CombatResolver
     /// 1-10: Life Support, 11-30: Sensors, 31-60: Weapons Array, 61-80: Engines, 81-100: Power Core.
     /// If a system is already wrecked, cascades to the next one down.
     /// </summary>
-    public static ShipSystem SystemFromPercent(int percent, ShipInstance target)
+    public static ShipSystem? SystemFromPercent(int percent, ShipInstance target)
     {
-        var order = new[]
-        {
-            (Max: 10, System: ShipSystem.LifeSupport),
-            (Max: 30, System: ShipSystem.Sensors),
-            (Max: 60, System: ShipSystem.WeaponsArray),
-            (Max: 80, System: ShipSystem.Engines),
-            (Max: 100, System: ShipSystem.PowerCore)
-        };
+        ShipSystem system = percent <= 10 ? ShipSystem.LifeSupport : percent <= 30 ? ShipSystem.Sensors
+            : percent <= 60 ? ShipSystem.WeaponsArray : percent <= 80 ? ShipSystem.Engines : ShipSystem.PowerCore;
+        return NextAvailableSystem(system, target);
+    }
 
-        foreach (var entry in order)
-        {
-            if (percent <= entry.Max)
-            {
-                // If this system is already wrecked, cascade to next.
-                if (target.Systems.Get(entry.System) != SystemCondition.Wrecked)
-                    return entry.System;
-            }
-        }
-
-        // All systems wrecked — hit the power core (or crew damage in full rules).
-        return ShipSystem.PowerCore;
+    private static ShipSystem? NextAvailableSystem(ShipSystem startingSystem, ShipInstance target)
+    {
+        ShipSystem[] order = [ShipSystem.LifeSupport, ShipSystem.Sensors, ShipSystem.WeaponsArray, ShipSystem.Engines, ShipSystem.PowerCore];
+        for (int i = Array.IndexOf(order, startingSystem); i < order.Length; i++)
+            if (target.Systems.Get(order[i]) != SystemCondition.Wrecked) return order[i];
+        return null;
     }
 }
