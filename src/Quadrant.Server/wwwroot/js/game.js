@@ -490,7 +490,7 @@ function renderHelm() {
     const pending = pendingMove?.option;
     actionPanel.innerHTML = `
         <div class="actor-name" style="color:${teamColor(actor.teamId)}">${actor.name}</div>
-        ${actor.helmAction === 'Glide' ? '<div class="hint">Glide: half speed, +2 distance between turns; uses a minor crew action.</div>' : actor.helmAction === 'None' ? '<div class="hint">No crew member can move this ship.</div>' : ''}
+        ${actor.helmAction === 'Glide' ? '<div class="hint" title="Move up to half speed with distance between turns increased by 2. The acting crew member adds their Piloting ranks to AC and TL for the round. This is a minor crew action.">Glide: half speed, +2 distance between turns; uses a minor crew action.</div>' : actor.helmAction === 'None' ? '<div class="hint">No crew member can move this ship.</div>' : ''}
         ${pending
             ? `<div class="hint">${pending.isTurnInPlace
                     ? `Turning in place to face ${facingNames[pending.finalFacing]}.`
@@ -499,9 +499,9 @@ function renderHelm() {
                <button class="btn btn-ghost" id="btn-cancel-move">Cancel</button>`
             : state.pendingStunt
                 ? `<div class="hint">${state.pendingStunt}: choose a highlighted destination to preview the result.</div>${(state.options?.items || []).some(m => m.position.q === actor.q && m.position.r === actor.r) ? '<button class="btn btn-ghost" id="btn-stunt-hold">Preview current hex</button>' : ''}`
-                : `<div class="hint">Click a highlighted hex to preview a move.${actor.helmAction === 'Pilot' ? ' Click your own ship to turn in place.' : ''}</div>
-                   <button class="btn btn-ghost" id="btn-hold">Hold Position</button>
-                   ${actor.stuntChances?.backOff != null ? `<div class="detail-section">Stunts</div><button class="btn btn-ghost" data-stunt="Back Off">Back Off (${actor.stuntChances.backOff}%)</button> <button class="btn btn-ghost" data-stunt="Flip and Burn">Flip and Burn (${actor.stuntChances.flipAndBurn}%)</button> <button class="btn btn-ghost" data-stunt="Evade">Evade (${actor.stuntChances.evade}%)</button> <button class="btn btn-ghost" data-stunt="Slide">Slide (${actor.stuntChances.slide}%)</button>` : ''}`}`;
+                : `<div class="hint"><span title="Fly up to the ship's speed, turning according to its maneuverability.">Click a highlighted hex to preview a move.</span>${actor.helmAction === 'Pilot' ? ' <span title="Turn to any facing without moving. Clumsy ships take −4 AC and TL; poor ships take −2 until the next round.">Click your own ship to turn in place.</span>' : ''}</div>
+                   <button class="btn btn-ghost" id="btn-hold" title="Stay in the current hex and keep the current facing.">Hold Position</button>
+                   ${actor.stuntChances?.backOff != null ? `<div class="detail-section">Stunts</div><button class="btn btn-ghost" data-stunt="Back Off" title="Move backward up to half speed without turning. On failure, move back 1 hex; failure by 5 or more prevents movement and gives −4 AC and TL until the next round.">Back Off (${actor.stuntChances.backOff}%)</button> <button class="btn btn-ghost" data-stunt="Flip and Burn" title="Move forward up to half speed without turning, then rotate 180 degrees. On failure, move up to half speed without rotating.">Flip and Burn (${actor.stuntChances.flipAndBurn}%)</button> <button class="btn btn-ghost" data-stunt="Evade" title="Move normally and gain +2 AC and TL until the next round. On failure, move normally without the bonus; failure by 5 or more gives −2 AC and TL instead.">Evade (${actor.stuntChances.evade}%)</button> <button class="btn btn-ghost" data-stunt="Slide" title="Move diagonally forward to port or starboard up to full speed without changing facing. On failure, move forward up to half speed without turning.">Slide (${actor.stuntChances.slide}%)</button>` : ''}`}`;
 
     const scienceShips = state.ships.filter(ship => ship.id === actor.id && !ship.isDestroyed && !ship.isDisabled &&
         ((ship.crew || []).some(crew => crew.role === 'Science Officer' && !crew.actionUsed) || (ship.targetedSystems || []).length > 0));
