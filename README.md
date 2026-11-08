@@ -12,6 +12,25 @@ docker run --name quadrant-server -p 5180:5180 -v quadrant-data:/app/data --rest
 
 Then open <http://localhost:5180>. The named volume keeps saved games when the container is replaced. For local development, `docker-compose.override.yml` is applied automatically by `docker compose up`; it builds from source and mounts `wwwroot` so UI edits appear on refresh without restarting. To run the published image locally without the development override, use `docker compose -f docker-compose.yml up -d`.
 
+### Automatic image updates
+
+For a deployment using the published Compose image, `scripts/update-image.sh` pulls the latest image from GHCR and recreates the server only when its image has changed. It preserves the named data volume. It deliberately ignores the development override; do not use it for a source-built development server. The cron user needs Docker access and, if the image is private, an existing `docker login ghcr.io` session.
+
+On the Docker LXC at `192.168.68.94`, copy the update script from this checkout (run from the repository directory on your local machine):
+
+```sh
+ssh root@192.168.68.94 'mkdir -p /root/containers/quadrant/scripts'
+scp scripts/update-image.sh root@192.168.68.94:/root/containers/quadrant/scripts/update-image.sh
+```
+
+The script uses `/root/containers/quadrant/docker-compose.yml`; ensure that file defines the published `ghcr.io/magico13/quadrant:latest` image as the `server` service. On the LXC, start that Compose deployment if it is not already running, then add this line to root's crontab with `crontab -e`:
+
+```cron
+* * * * * /bin/bash /root/containers/quadrant/scripts/update-image.sh >> /root/containers/quadrant/image-update.log 2>&1
+```
+
+The job checks once per minute. Start the published Compose deployment first from `/root/containers/quadrant` with `docker compose -f docker-compose.yml up -d`; the script does not create a new deployment. Image updates recreate the container and briefly interrupt active games.
+
 Game sessions are saved in SQLite. Docker Compose stores the database in the
 `quadrant-data` named volume, which survives container rebuilds and `docker compose down`.
 Avoid `docker compose down -v` if you want to keep saved games. Outside Docker, the
