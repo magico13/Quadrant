@@ -84,6 +84,50 @@ public class TeamSetupTests
         Assert.Equal(facing, ship.Facing);
     }
 
+    [Theory]
+    [InlineData(13, 2)]
+    [InlineData(12, 0)]
+    [InlineData(8, -2)]
+    public void EvadeUsesNormalMovementAndAppliesDefenseUntilNextRound(int roll, int modifier)
+    {
+        var def = new ShipDefinition { Id = "ship", Name = "Ship", Tier = 2, Speed = 8,
+            Shields = new QuadrantShields(), Crew = [new CrewDefinition("Pilot", new Dictionary<string, int> { ["piloting"] = 0 })] };
+        var state = new GameState { GameId = "test", RoomCode = "test", Phase = CombatPhase.Helm, ActionOrder = ["a", "b"] };
+        var ship = def.Instantiate("a", new Hex(0, 0), Facing.East, 0);
+        state.Ships.Add(ship);
+        state.Ships.Add(def.Instantiate("b", new Hex(20, 0), Facing.West, 1));
+        var engine = new CombatEngine(state, new BackOffDice(roll));
+        var normal = engine.GetValidMoves().Select(m => (m.Position, m.FinalFacing)).ToHashSet();
+        Assert.True(engine.StartStunt("Evade").IsValid);
+        Assert.True(normal.SetEquals(engine.GetValidMoves().Select(m => (m.Position, m.FinalFacing))));
+        Assert.Equal(modifier, ship.RoundAcTlModifier);
+        Assert.Contains(0, ship.CrewActionsUsed);
+        ship.BeginRound();
+        Assert.Equal(0, ship.RoundAcTlModifier);
+    }
+
+    [Theory]
+    [InlineData(13, true)]
+    [InlineData(12, false)]
+    public void SlideUsesDiagonalOnSuccessAndHalfSpeedForwardOnFailure(int roll, bool success)
+    {
+        var def = new ShipDefinition { Id = "ship", Name = "Ship", Tier = 2, Speed = 8,
+            Shields = new QuadrantShields(), Crew = [new CrewDefinition("Pilot", new Dictionary<string, int> { ["piloting"] = 0 })] };
+        var state = new GameState { GameId = "test", RoomCode = "test", Phase = CombatPhase.Helm, ActionOrder = ["a", "b"] };
+        var ship = def.Instantiate("a", new Hex(0, 0), Facing.East, 0);
+        state.Ships.Add(ship);
+        state.Ships.Add(def.Instantiate("b", new Hex(20, 0), Facing.West, 1));
+        var engine = new CombatEngine(state, new BackOffDice(roll));
+        Assert.True(engine.StartStunt("Slide").IsValid);
+        var moves = engine.GetValidMoves();
+        Assert.All(moves, m => Assert.Equal(Facing.East, m.FinalFacing));
+        Assert.Equal(success ? 17 : 5, moves.Count);
+        Assert.Contains(moves, m => m.Position == ship.Position.Step(success ? 1 : 2, success ? 8 : 4));
+        if (success) Assert.Contains(moves, m => m.Position == ship.Position.Step(3, 8));
+        Assert.True(engine.TryMoveTo(moves.Last().Position, moves.Last().FinalFacing).IsValid);
+        Assert.Equal(Facing.East, ship.Facing);
+    }
+
     private sealed class BackOffDice(int roll) : IDiceRoller
     {
         public int RollD20() => roll;

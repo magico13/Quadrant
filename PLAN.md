@@ -24,6 +24,8 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 ## TODO — Completed
 - [x] **Movement confirmation step (client).** Helm moves preview first: ghost ship + Confirm/Cancel panel. `game.js` (`pendingMove`, `setPendingMove()`, `confirmMove()`) + `hex.js` (`setGhost()`).
 - [x] **Turn In Place stunt.** Facing picker on own-ship click during Helm. Clumsy –4, poor –2 AC/TL until next round. `TryTurnInPlace(Facing)` in `CombatEngine.cs`.
+- [x] **Back Off and Flip and Burn stunts.** Piloting checks and stunt-specific movement are implemented. Flip and Burn permits movement up to half speed, including on failure; failure prevents rotation.
+- [x] **Evade and Slide stunts.** Evade uses normal movement and modifies AC/TL according to its check; Slide moves diagonally on success or forward at up to half speed on failure.
 - [x] **BFS turn rules fix.** Seed `sinceTurn = 0`; perfect ships can turn at any point; consecutive turn cap: perfect = 2, others = 1.
 - [x] **Stale highlights on phase change.** `renderGunnery()` clears Helm-phase highlights, path, and ghost.
 - [x] **Weapon-arc hex highlighting (client).** Per-increment range bands with opacity fading (3 bands: bright → medium → faint). Click a weapon chip to show its arc + range from current position/facing. `rangeBandHexes()` in `game.js`, per-band opacity in `hex.js`.
@@ -37,8 +39,8 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 
 ### Hotseat rules completion (before multiplayer)
 - [ ] Audit existing movement, attacks, critical damage and phase timing against the local `wiki_pages/Chapter 9_ Starships - Rules - Archives of Nethys_ Starfinder RPG Database.html` and document deliberate deviations.
-- [ ] Model crew, roles, role changes, action limits, skills, Resolve, minor actions and crew casualties.
-- [ ] Implement crew actions, stunts, system damage effects and engineering repairs.
+- [ ] Complete crew, role-change, action-limit, skill, ship Resolve and minor-action rules; add crew casualties.
+- [ ] Implement the remaining crew actions, stunts, system damage effects and engineering repairs described below. Scan follows multiplayer.
 - [ ] **Computer ICM bonuses.** Track each computer node's bonus and uses per round; prompt before an eligible starship combat check to apply one available node. Multiple nodes can affect separate checks, but bonuses cannot stack on one check.
 - [x] **Linked weapon batteries.** Group identical direct-fire mounts in the same arc; resolve each linked group as one gunnery action and check, with combined damage.
 - [ ] Implement remaining weapon property rules in the priority order below.
@@ -46,23 +48,30 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 
 ### Multiplayer
 - [ ] **Player login / team assignment.** Keep team identity separate from player identity; initially assign control of teams, with shared teams and control of multiple teams possible later. Room codes remain the way to join.
-- [ ] **Hidden information.** Opponent's hull, shields, weapons, and system damage not visible until revealed by combat or scanning. Server must filter state per-player.
+- [ ] **Information visibility.** Offer a game option for public information or hidden information. In hidden mode, the server filters state per player; enemy details are revealed by combat or scanning. Hotseat remains public.
 - [ ] **Real-time sync.** Replace REST polling with SignalR (or SSE) so both players see updates instantly without refresh.
 
 ### Alliances (Later)
 - [ ] **Alliances between teams.** Allow two teams to become friendly when both agree; either team can end the alliance unilaterally. Decide how allied victories work when this feature is designed.
 - Until then, cooperative players can share a team. Ships act independently, and team identity should remain separate from player identity so multiplayer can eventually support shared teams.
 
-### Sensor / Scanning
+### Sensor / Scanning (after multiplayer)
 - Ships remain visible on the grid; there is no fog of war or hidden ship position.
-- [ ] **Scan action (Science Officer).** Take a Helm-phase action to reveal information about a visible ship according to the sensor rules.
+- [ ] **Scan action (Science Officer).** After multiplayer and its visibility option, take a Helm-phase action to reveal progressively more information about a visible ship according to the sensor rules. Track discoveries per observing team and target; public mode already exposes this information.
 
 ### Crew Actions & Stunts
-- [ ] **Captain actions.** Implement the applicable any-phase actions, including taunt. When adding them, include available captain actions in the Gunnery auto-end decision so a captain can act after the ship fires.
-- [ ] **Science Officer actions.** Scan, balance shields, target a system, and lock on, following the relevant rules.
-- [ ] **Engineer actions.** Repair hull/shields, Reroute Power (boost a system at cost of another).
-- [ ] **Stunts.** Back Off, Barrel Roll, Evade, Flip and Burn, Flyby, Slide — each with movement/AC/TL effects.
-- [ ] **Push actions.** Implement the chapter's push-action rules, including restrictions when the necessary system is malfunctioning or wrecked.
+
+Already implemented: Fly, Back Off, Evade, Flip and Burn, Slide, Turn In Place, Divert, Hold It Together, Shoot, Balance, Target System, Glide and Snap Shot. Crew roles and action tracking exist, and some push restrictions are enforced; audit these implementations as the remaining rules are added.
+
+- [ ] **Pilot movement and stunts.** Implement Barrel Roll and Flyby, in that order, plus Maneuver. Barrel Roll temporarily swaps port and starboard shields and weapon arcs; Flyby requires a crossed enemy, free-attack handling and a special subsequent gunnery choice. Cover success, failure, severe failure where applicable, occupancy and persistence.
+- [ ] **Captain actions.** Add Demand, Encourage and Taunt, then Orders and Moving Speech once advanced crew prerequisites and Resolve are available. Track check bonuses, timed penalties and per-combat limits. Include available captain actions in the Gunnery auto-end decision so a captain can act after the ship fires.
+- [ ] **Engineer actions.** Add Patch, including pooled successful actions and temporary system-condition effects, then Overpower and Quick Fix. Divert already restores shields; system patching is distinct from hull repair.
+- [ ] **Gunner actions.** Add Fire at Will, then Broadside and Precise Targeting. Support multiple shots within one crew action and enforce per-weapon firing limits.
+- [ ] **Advanced pilot actions.** Add Full Power and Audacious Gambit after movement parameters and Resolve are available.
+- [ ] **Science officer actions.** Add Lock On and Improve Countermeasures with their rank and Resolve requirements. Scan is deferred until after multiplayer, as described above.
+- [ ] **Ship Resolve and advanced prerequisites.** Each ship has a shared encounter Resolve pool using the NPC ship rule: tier / 5 + 3. Define integer rounding for fractional results when implementing it, persist and reset the pool per encounter, and spend it for eligible actions. Model the character levels and relevant skill ranks needed for advanced actions; allow Orders to grant two different role actions to one crew member.
+- [ ] **Push actions.** Apply the chapter's restrictions consistently: a push action cannot use a malfunctioning or wrecked necessary system.
+- [ ] **Verification.** For each batch, test eligibility, action consumption, rolls and failure outcomes, damaged systems, effect expiry and session restoration. Test movement interruptions and gunnery interactions for stunts.
 
 ### Weapon Special Tags
 - [x] **Point.** Point weapons are capped at their first range increment. Tracking missiles are intercepted before damage; each eligible weapon checks once per round, automatically for a lone incoming missile, with a defend/pass choice when multiple missiles threaten the same arc.
@@ -134,8 +143,7 @@ Game Server (ASP.NET Core + SignalR)
 | Hotseat | Single screen, alternating control, both players see all rolls |
 
 ### Out (Deferred)
-- Stunts (Back Off, Barrel Roll, Evade, Flip and Burn, Flyby, Slide) — Turn In Place is done
-- Captain / Science Officer actions
+- Scan and hidden information (after multiplayer)
 - Crew damage
 - Obstacles (asteroids, space stations)
 - Full crew ability system

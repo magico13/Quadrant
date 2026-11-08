@@ -170,7 +170,7 @@ public class GameController : ControllerBase
                         scienceChances = role == "Science Officer" ? new { balance = engine.GetScienceSuccessChance(s, i), targets = state.Ships.Where(t => t.TeamId != s.TeamId && !t.IsDestroyed).ToDictionary(t => t.InstanceId, t => engine.GetScienceSuccessChance(s, i, t)) } : null };
                 }),
                 helmAction = s.Definition.Crew.Count == 0 || s.CrewRoles.Contains("Pilot") ? "Pilot" : s.AvailableMinorCrew() >= 0 ? "Glide" : "None",
-                stuntChances = new { backOff = engine.GetStuntSuccessChance(s, "Back Off"), flipAndBurn = engine.GetStuntSuccessChance(s, "Flip and Burn") },
+                stuntChances = new { backOff = engine.GetStuntSuccessChance(s, "Back Off"), flipAndBurn = engine.GetStuntSuccessChance(s, "Flip and Burn"), evade = engine.GetStuntSuccessChance(s, "Evade"), slide = engine.GetStuntSuccessChance(s, "Slide") },
                 gunneryAction = s.Definition.Crew.Count == 0 || s.AvailableGunner() >= 0 ? "Gunner" : !s.GunnerActionTaken && s.AvailableMinorCrew() >= 0 ? "Snap Shot" : "None",
                 crewShotsRemaining = s.RemainingGunneryActions(),
                 weapons = s.Weapons.Select((w, i) =>

@@ -597,7 +597,7 @@ public sealed class CombatEngine
         ship.Systems.GetActionPenalty(ShipSystem.Engines) + ship.Systems.PowerCoreGlobalPenalty;
 
     private static int StuntDc(ShipInstance ship, string stunt) =>
-        (int)Math.Floor((stunt == "Back Off" ? 10 : 15) + 1.5 * ship.Definition.Tier);
+        (int)Math.Floor((stunt == "Flip and Burn" ? 15 : 10) + 1.5 * ship.Definition.Tier);
 
     public int? GetStuntSuccessChance(ShipInstance ship, string stunt)
     {
@@ -615,7 +615,7 @@ public sealed class CombatEngine
         var ship = _state.CurrentActor;
         if (ship is null || _state.Phase != CombatPhase.Helm) return MoveValidationResult.Fail("No ship to move.");
         if (PendingStunt is not null) return MoveValidationResult.Fail("Finish the selected stunt first.");
-        if (stunt is not ("Back Off" or "Flip and Burn")) return MoveValidationResult.Fail("Unknown stunt.");
+        if (stunt is not ("Back Off" or "Flip and Burn" or "Evade" or "Slide")) return MoveValidationResult.Fail("Unknown stunt.");
         ship.InitializeCrewRoles();
         int pilot = ship.CrewRoles.IndexOf("Pilot");
         if (pilot < 0 || ship.CrewActionsUsed.Contains(pilot)) return MoveValidationResult.Fail("The stunt requires an available pilot.");
@@ -636,6 +636,33 @@ public sealed class CombatEngine
         int total = roll + bonus;
         bool failedByFive = penalty == int.MinValue || total <= dc - 5;
         bool failed = penalty == int.MinValue || total < dc;
+        if (stunt == "Evade")
+        {
+            _stuntMoves = _ComputeReachable().Select(kv => new MoveOption(kv.Key.Pos, kv.Key.Facing, kv.Value)).ToList();
+            int modifier = failedByFive ? -2 : failed ? 0 : 2;
+            ship.RoundAcTlModifier += modifier;
+            ship.CrewActionsUsed.Add(pilot);
+            PendingStunt = stunt;
+            LastEvents.Add(new CombatEvent("Helm", ship.InstanceId,
+                $"{ShipLogName(ship)} attempts Evade: {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(failed ? "FAIL" : "SUCCESS")}; AC and TL {modifier:+0;-0;0}."));
+            return MoveValidationResult.Ok(ship.Position, ship.Facing);
+        }
+        if (stunt == "Slide")
+        {
+            int[] directions = failed ? [(int)ship.Facing] : [((int)ship.Facing + 5) % 6, ((int)ship.Facing + 1) % 6];
+            int limit = failed ? ship.Speed / 2 : ship.Speed;
+            var blocked = _state.Ships.Where(s => s.InstanceId != ship.InstanceId && !s.IsDestroyed).Select(s => s.Position).ToHashSet();
+            _stuntMoves = directions.SelectMany(direction => Enumerable.Range(0, limit + 1)
+                .Select(distance => new MoveOption(ship.Position.Step(direction, distance), ship.Facing,
+                    Enumerable.Range(0, distance + 1).Select(step => new PathStep(ship.Position.Step(direction, step), ship.Facing)).ToList())))
+                .Where(option => !blocked.Contains(option.Position))
+                .DistinctBy(option => (option.Position, option.FinalFacing)).ToList();
+            ship.CrewActionsUsed.Add(pilot);
+            PendingStunt = stunt;
+            LastEvents.Add(new CombatEvent("Helm", ship.InstanceId,
+                $"{ShipLogName(ship)} attempts Slide: {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(failed ? "FAIL" : "SUCCESS")}."));
+            return MoveValidationResult.Ok(ship.Position, ship.Facing);
+        }
         int half = ship.Speed / 2;
         int minimum = stunt == "Back Off" ? (failedByFive ? 0 : 1) : 0;
         int maximum = stunt == "Back Off" ? (failedByFive ? 0 : failed ? 1 : half) : half;
