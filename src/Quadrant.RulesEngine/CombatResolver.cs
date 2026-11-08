@@ -41,7 +41,7 @@ public static class CombatResolver
     public static AttackResult ResolveProjectileImpact(TrackingProjectile projectile, ShipInstance target, IDiceRoller dice, int roll, int checkBonus, int defenseValue, Hex impactFrom, bool divertWeapons = false, ShipSystem? targetedSystem = null)
     {
         int rawDamage = projectile.Weapon.Damage.Roll(dice, divertWeapons);
-        Quadrant quadrant = target.QuadrantOf(impactFrom);
+        Quadrant quadrant = projectile.FlybyQuadrant is { } selected ? target.ShieldQuadrantFor(selected) : target.QuadrantOf(impactFrom);
         var damage = ApplyDamage(target, quadrant, rawDamage, roll, dice, targetedSystem);
         int total = roll + checkBonus;
         string desc = $"Tracking check {FormatCheck(roll, checkBonus, total)} vs TL {defenseValue} — IMPACT! {damage.Description}.";
@@ -50,18 +50,25 @@ public static class CombatResolver
     }
 
     public static AttackCheckResult RollAttack(ShipInstance attacker, ShipInstance target, Weapon weapon, IDiceRoller dice,
-        int? gunnerBonus = null, int? defense = null, bool rollDamage = true)
+        int? gunnerBonus = null, int? defense = null, bool rollDamage = true, bool flyby = false)
     {
-        int range = attacker.Position.DistanceTo(target.Position);
+        int range = flyby ? 1 : attacker.Position.DistanceTo(target.Position);
+        double angle = flyby ? weapon.Arc switch
+        {
+            FiringArc.Port => -90,
+            FiringArc.Starboard => 90,
+            FiringArc.Aft => 180,
+            _ => 0
+        } : attacker.AngleFromFacing(target.Position);
         int defenseValue = defense ?? (weapon.Type == WeaponType.Tracking ? target.CurrentTL : target.CurrentAC);
         string defenseName = weapon.Type == WeaponType.Tracking ? "TL" : "AC";
-        if (!weapon.CanTarget(range, attacker.AngleFromFacing(target.Position)))
+        if (!weapon.CanTarget(range, angle))
             return new(false, 0, 0, 0, defenseValue, defenseName, 0, "Cannot target: out of range or wrong arc.");
 
         int bonus = gunnerBonus ?? ComputeGunnerBonus(attacker);
         if (bonus == int.MinValue)
             return new(false, 0, 0, 0, defenseValue, defenseName, 0, "Weapons array is wrecked — attack auto-fails.");
-        bonus += weapon.RangePenalty(range) + weapon.ArcPenalty(attacker.AngleFromFacing(target.Position));
+        bonus += weapon.RangePenalty(range) + weapon.ArcPenalty(angle);
         int roll = dice.RollD20();
         int total = roll + bonus;
         bool hit = roll == 20 || (roll != 1 && total >= defenseValue);

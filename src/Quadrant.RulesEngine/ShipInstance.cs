@@ -57,6 +57,16 @@ public sealed class ShipInstance
     /// <summary>Whether the pilot chose to turn in place this round (affects AC if clumsy/poor).</summary>
     public bool TurnedInPlaceThisRound { get; set; }
 
+    /// <summary>A successful Barrel Roll, awaiting or active during Gunnery.</summary>
+    public bool BarrelRolledThisRound { get; set; }
+    public bool BarrelRollActive { get; set; }
+    public string? FlybyTargetId { get; set; }
+    public bool FlybySucceeded { get; set; }
+    public bool FlybyCrossed { get; set; }
+    public FiringArc? FlybyFiringArc { get; set; }
+
+    public bool CanBarrelRoll => Definition.Size?.ToLowerInvariant() is "tiny" or "small" or "medium" or "large";
+
     // --- Convenience accessors ---
 
     public string Name => Definition.Name;
@@ -69,7 +79,14 @@ public sealed class ShipInstance
     public int SpeedPilotingAdjustment => ShipDefinition.PilotingModifierForSpeed(Speed) - Definition.SpeedPilotingModifier;
     public Maneuverability Maneuverability => Definition.Maneuverability;
     [JsonIgnore]
-    public IReadOnlyList<Weapon> Weapons => Definition.Weapons;
+    public IReadOnlyList<Weapon> Weapons => BarrelRollActive
+        ? Definition.Weapons.Select(w => w.Arc switch
+        {
+            FiringArc.Port => w with { Arc = FiringArc.Starboard },
+            FiringArc.Starboard => w with { Arc = FiringArc.Port },
+            _ => w
+        }).ToList()
+        : Definition.Weapons;
 
     /// <summary>Current roles in the same order as the ship's crew definitions.</summary>
     public List<string> CrewRoles { get; } = [];
@@ -190,6 +207,20 @@ public sealed class ShipInstance
     ///   Port:      offsets 4, 5 (left side faces)
     /// </summary>
     public Quadrant QuadrantOf(Hex targetPosition)
+        => ShieldQuadrantFor(PhysicalQuadrantOf(targetPosition));
+
+    public Quadrant ShieldQuadrantFor(Quadrant quadrant)
+    {
+        return BarrelRollActive ? quadrant switch
+        {
+            Quadrant.Port => Quadrant.Starboard,
+            Quadrant.Starboard => Quadrant.Port,
+            _ => quadrant
+        } : quadrant;
+    }
+
+    /// <summary>The spatial quadrant, independent of which shield protects it.</summary>
+    public Quadrant PhysicalQuadrantOf(Hex targetPosition)
     {
         int offset = ArcOffsetTo(targetPosition);
         return offset switch
@@ -244,6 +275,10 @@ public sealed class ShipInstance
         Systems.HeldSystem = null;
         RoundAcTlModifier = 0;
         TurnedInPlaceThisRound = false;
+        BarrelRolledThisRound = BarrelRollActive = false;
+        FlybyTargetId = null;
+        FlybySucceeded = FlybyCrossed = false;
+        FlybyFiringArc = null;
     }
 }
 

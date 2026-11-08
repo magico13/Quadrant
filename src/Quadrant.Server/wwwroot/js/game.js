@@ -488,20 +488,28 @@ function renderHelm() {
 
     const facingNames = ['NW', 'NE', 'E', 'SE', 'SW', 'W'];
     const pending = pendingMove?.option;
+    const flybyEnemy = state.pendingStunt === 'Flyby' && pending
+        ? state.ships.find(ship => ship.teamId !== actor.teamId && !ship.isDestroyed &&
+            pending.path?.some(step => step.q === ship.q && step.r === ship.r))
+        : null;
     actionPanel.innerHTML = `
         <div class="actor-name" style="color:${teamColor(actor.teamId)}">${actor.name}</div>
-        ${actor.helmAction === 'Glide' ? '<div class="hint" title="Move up to half speed with distance between turns increased by 2. The acting crew member adds their Piloting ranks to AC and TL for the round. This is a minor crew action.">Glide: half speed, +2 distance between turns; uses a minor crew action.</div>' : actor.helmAction === 'None' ? '<div class="hint">No crew member can move this ship.</div>' : ''}
+        ${actor.helmAction === 'Glide' ? '<div class="hint" title="Move up to half speed; +2 distance between turns; add Piloting ranks to AC/TL until next round. Uses a minor crew action.">Glide: half speed, +2 distance between turns; uses a minor crew action.</div>' : actor.helmAction === 'None' ? '<div class="hint">No crew member can move this ship.</div>' : ''}
         ${pending
             ? `<div class="hint">${pending.isTurnInPlace
                     ? `Turning in place to face ${facingNames[pending.finalFacing]}.`
-                    : `Moving to (${pending.position.q}, ${pending.position.r}), facing ${facingNames[pending.finalFacing]}.`} Click another hex or your ship to change, or confirm.</div>
+                    : `Moving to (${pending.position.q}, ${pending.position.r}), facing ${facingNames[pending.finalFacing]}.${flybyEnemy ? ` Flyby against ${flybyEnemy.name}.` : ''}`} Click another hex or your ship to change, or confirm.</div>
                <button class="btn btn-primary" id="btn-confirm-move">Confirm Move</button>
                <button class="btn btn-ghost" id="btn-cancel-move">Cancel</button>`
             : state.pendingStunt
                 ? `<div class="hint">${state.pendingStunt}: choose a highlighted destination to preview the result.</div>${(state.options?.items || []).some(m => m.position.q === actor.q && m.position.r === actor.r) ? '<button class="btn btn-ghost" id="btn-stunt-hold">Preview current hex</button>' : ''}`
-                : `<div class="hint"><span title="Fly up to the ship's speed, turning according to its maneuverability.">Click a highlighted hex to preview a move.</span>${actor.helmAction === 'Pilot' ? ' <span title="Turn to any facing without moving. Clumsy ships take −4 AC and TL; poor ships take −2 until the next round.">Click your own ship to turn in place.</span>' : ''}</div>
+                : `<div class="hint"><span title="Move up to full speed with normal turns.">Click a highlighted hex to preview a move.</span>${actor.helmAction === 'Pilot' ? ' <span title="Turn to any facing without moving. Clumsy: −4 AC/TL until next round. Poor: −2 AC/TL until next round.">Click your own ship to turn in place.</span>' : ''}</div>
                    <button class="btn btn-ghost" id="btn-hold" title="Stay in the current hex and keep the current facing.">Hold Position</button>
-                   ${actor.stuntChances?.backOff != null ? `<div class="detail-section">Stunts</div><button class="btn btn-ghost" data-stunt="Back Off" title="Move backward up to half speed without turning. On failure, move back 1 hex; failure by 5 or more prevents movement and gives −4 AC and TL until the next round.">Back Off (${actor.stuntChances.backOff}%)</button> <button class="btn btn-ghost" data-stunt="Flip and Burn" title="Move forward up to half speed without turning, then rotate 180 degrees. On failure, move up to half speed without rotating.">Flip and Burn (${actor.stuntChances.flipAndBurn}%)</button> <button class="btn btn-ghost" data-stunt="Evade" title="Move normally and gain +2 AC and TL until the next round. On failure, move normally without the bonus; failure by 5 or more gives −2 AC and TL instead.">Evade (${actor.stuntChances.evade}%)</button> <button class="btn btn-ghost" data-stunt="Slide" title="Move diagonally forward to port or starboard up to full speed without changing facing. On failure, move forward up to half speed without turning.">Slide (${actor.stuntChances.slide}%)</button>` : ''}`}`;
+                   ${actor.stuntChances?.backOff != null ? `<div class="detail-section">Stunts</div><button class="btn btn-ghost" data-stunt="Back Off" title="Move backward up to half speed without turning. Failure: move back 1 hex. Fail by 5+: no movement; −4 AC/TL until next round.">Back Off (${actor.stuntChances.backOff}%)</button> <button class="btn btn-ghost" data-stunt="Flip and Burn" title="Move forward up to half speed without turning, then rotate 180°. Failure: move forward up to half speed without rotating.">Flip and Burn (${actor.stuntChances.flipAndBurn}%)</button> <button class="btn btn-ghost" data-stunt="Evade" title="Move up to full speed with normal turns; +2 AC/TL until next round. Failure: normal movement; no bonus. Fail by 5+: normal movement; −2 AC/TL until next round.">Evade (${actor.stuntChances.evade}%)</button> <button class="btn btn-ghost" data-stunt="Slide" title="Move diagonally forward to port or starboard up to full speed without changing facing. Failure: move forward up to half speed without turning.">Slide (${actor.stuntChances.slide}%)</button> ${actor.stuntChances.barrelRoll != null ? `<button class="btn btn-ghost" data-stunt="Barrel Roll" title="Move up to half speed with normal turns; swap port/starboard shields and weapons for Gunnery. Failure: move half speed; no swap. Fail by 5+: move half speed; no swap; −4 AC/TL until next round.">Barrel Roll (${actor.stuntChances.barrelRoll}%)</button>` : ''}` : ''}`}`;
+
+    if (!pending && !state.pendingStunt && actor.stuntChances?.backOff != null) {
+        actionPanel.innerHTML += ` <button class="btn btn-ghost" data-stunt="Flyby" title="Move up to full speed with normal turns through one enemy; avoid its free attack and fire one weapon arc at range 1 against any quadrant during Gunnery. Failure: normal movement, free attack and targeting.">Flyby</button>`;
+    }
 
     const scienceShips = state.ships.filter(ship => ship.id === actor.id && !ship.isDestroyed && !ship.isDisabled &&
         ((ship.crew || []).some(crew => crew.role === 'Science Officer' && !crew.actionUsed) || (ship.targetedSystems || []).length > 0));
@@ -813,6 +821,7 @@ function renderGunnery() {
     actionPanel.innerHTML = `
         <div class="actor-name" style="color:${teamColor(actor.teamId)}">${actor.name}</div>
         <div class="hint">Choose a weapon and target, then fire it. Hits are resolved in order; damage waits until all ships finish Gunnery.</div>
+        ${actor.barrelRollActive ? '<div class="hint">Barrel Roll: port and starboard shields and weapon arcs are swapped for this Gunnery phase.</div>' : ''}
         <div class="hint">Up to ${Math.min(actor.crewShotsRemaining, weapons.size)} shot${Math.min(actor.crewShotsRemaining, weapons.size) === 1 ? '' : 's'} remaining (${actor.crewShotsRemaining} available crew action${actor.crewShotsRemaining === 1 ? '' : 's'}).</div>
         ${actor.gunneryAction === 'Snap Shot' ? '<div class="hint">Snap Shot: one weapon, with a −2 gunnery penalty; uses a minor crew action.</div>' : ''}
         <div id="arc-choice" class="target-info"></div>
@@ -830,10 +839,10 @@ function renderGunnery() {
         if (activeWeapon !== null) {
             const opts = weapons.get(activeWeapon) || [];
             grid.setTargets(opts.map(o => [o.targetShipId, o.hitChancePercent]));
-            const activeArcOption = opts.find(o => o.arcChoiceRequired);
+            const activeArcOption = opts.find(o => o.targetShipId === selectedShots.get(activeWeapon) && o.arcChoiceRequired);
             if (activeArcOption) {
                 const selected = selectedTargetArcs.get(activeArcOption.targetShipId);
-                arcChoiceEl.innerHTML = `<span class="hint">This target is on an arc boundary. Choose one firing arc for all attacks against it this round.</span><div class="weapon-chips">${activeArcOption.arcChoices.map(arc => `<button class="weapon-chip arc-choice${selected === arc ? ' active' : ''}" data-arc="${arc}" data-target="${activeArcOption.targetShipId}">${arc}</button>`).join('')}</div>`;
+                arcChoiceEl.innerHTML = `<span class="hint">${activeArcOption.flyby ? 'Flyby: choose the firing arc for this turret.' : 'This target is on an arc boundary. Choose one firing arc for all attacks against it this round.'}</span><div class="weapon-chips">${activeArcOption.arcChoices.map(arc => `<button class="weapon-chip arc-choice${selected === arc ? ' active' : ''}" data-arc="${arc}" data-target="${activeArcOption.targetShipId}">${arc}</button>`).join('')}</div>`;
                 arcChoiceEl.querySelectorAll('[data-arc]').forEach(button => button.addEventListener('click', () => {
                     selectedTargetArcs.set(button.dataset.target, button.dataset.arc);
                     refresh();
@@ -843,7 +852,9 @@ function renderGunnery() {
             }
             // Show this specific weapon's range band as a visual aid (not clickable).
             const w = actor.weapons?.[activeWeapon];
-            if (w) {
+            if (opts.some(o => o.flyby && o.targetShipId === selectedShots.get(activeWeapon))) {
+                grid.setRangeHexes([]);
+            } else if (w) {
                 const inc = w.rangeIncrement ?? 5;
                 const maxVis = Math.min(w.maxRange ?? inc * 10, inc * 3); // show up to 3 increments, capped at max range
                 const hexes = rangeBandHexes(actor, w.minRange ?? 1, maxVis, w.arc, inc, w.broadArc);
@@ -876,6 +887,9 @@ function renderGunnery() {
 
         const targetId = activeWeapon === null ? null : selectedShots.get(activeWeapon);
         const activeOption = activeWeapon === null ? null : (weapons.get(activeWeapon) || []).find(o => o.targetShipId === targetId);
+        if (activeOption?.flyby) {
+            targetInfo.innerHTML += `<label>Flyby target quadrant <select id="flyby-quadrant">${['Forward', 'Starboard', 'Aft', 'Port'].map(q => `<option value="${q}">${q}</option>`).join('')}</select></label><div class="hint">Effective range: 1 hex. The first shot commits the firing arc for Flyby.</div>`;
+        }
         const missingArcChoice = !!activeOption?.arcChoiceRequired && !selectedTargetArcs.has(targetId);
         grid.setSelectedGunneryTarget(targetId ? actor.id : null, targetId);
         fireBtn.disabled = activeWeapon === null || !targetId || fired.has(activeWeapon) || missingArcChoice;
@@ -908,7 +922,8 @@ function renderGunnery() {
         const option = (weapons.get(activeWeapon) || []).find(o => o.targetShipId === targetShipId);
         const arc = option?.arcChoiceRequired ? selectedTargetArcs.get(targetShipId) : undefined;
         if (option?.arcChoiceRequired && !arc) return;
-        const response = await api(`/${roomCode}/fire`, { weaponIndex: activeWeapon, targetShipId, arc });
+        const targetQuadrant = option?.flyby ? document.getElementById('flyby-quadrant')?.value : undefined;
+        const response = await api(`/${roomCode}/fire`, { weaponIndex: activeWeapon, targetShipId, arc, targetQuadrant });
         if (!response.ok) addLog('error', 'Weapon could not fire.');
         await fetchState();
     });

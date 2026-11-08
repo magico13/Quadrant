@@ -142,7 +142,10 @@ public class GameController : ControllerBase
                 tl = s.CurrentTL,
                 isDestroyed = s.IsDestroyed,
                 isDisabled = s.IsDisabled,
-                shields = new { forward = s.Shields.Forward, starboard = s.Shields.Starboard, aft = s.Shields.Aft, port = s.Shields.Port },
+                barrelRollActive = s.BarrelRollActive,
+                flybyTargetId = s.FlybySucceeded && s.FlybyCrossed ? s.FlybyTargetId : null,
+                flybyFiringArc = s.FlybyFiringArc,
+                shields = new { forward = s.Shields.Forward, starboard = s.BarrelRollActive ? s.Shields.Port : s.Shields.Starboard, aft = s.Shields.Aft, port = s.BarrelRollActive ? s.Shields.Starboard : s.Shields.Port },
                 maxShield = s.Definition.Shields.Forward, // client uses this for arc opacity scaling
                 shieldCapacity = s.Definition.Shields.Forward + s.Definition.Shields.Starboard + s.Definition.Shields.Aft + s.Definition.Shields.Port,
                 shieldDivertMax = Math.Max(0, Math.Min(s.Definition.PowerCorePcu / 20,
@@ -170,7 +173,7 @@ public class GameController : ControllerBase
                         scienceChances = role == "Science Officer" ? new { balance = engine.GetScienceSuccessChance(s, i), targets = state.Ships.Where(t => t.TeamId != s.TeamId && !t.IsDestroyed).ToDictionary(t => t.InstanceId, t => engine.GetScienceSuccessChance(s, i, t)) } : null };
                 }),
                 helmAction = s.Definition.Crew.Count == 0 || s.CrewRoles.Contains("Pilot") ? "Pilot" : s.AvailableMinorCrew() >= 0 ? "Glide" : "None",
-                stuntChances = new { backOff = engine.GetStuntSuccessChance(s, "Back Off"), flipAndBurn = engine.GetStuntSuccessChance(s, "Flip and Burn"), evade = engine.GetStuntSuccessChance(s, "Evade"), slide = engine.GetStuntSuccessChance(s, "Slide") },
+                stuntChances = new { backOff = engine.GetStuntSuccessChance(s, "Back Off"), flipAndBurn = engine.GetStuntSuccessChance(s, "Flip and Burn"), evade = engine.GetStuntSuccessChance(s, "Evade"), slide = engine.GetStuntSuccessChance(s, "Slide"), barrelRoll = engine.GetStuntSuccessChance(s, "Barrel Roll") },
                 gunneryAction = s.Definition.Crew.Count == 0 || s.AvailableGunner() >= 0 ? "Gunner" : !s.GunnerActionTaken && s.AvailableMinorCrew() >= 0 ? "Snap Shot" : "None",
                 crewShotsRemaining = s.RemainingGunneryActions(),
                 weapons = s.Weapons.Select((w, i) =>
@@ -327,7 +330,7 @@ public class GameController : ControllerBase
         var session = _sessions.Get(roomCode);
         if (session is null) return NotFound(new { error = "Game not found." });
 
-        var result = session.Engine.ApplyFire(new FireAction(req.WeaponIndex, req.TargetShipId), req.Arc is null ? null : Enum.Parse<FiringArc>(req.Arc, true));
+        var result = session.Engine.ApplyFire(new FireAction(req.WeaponIndex, req.TargetShipId, req.TargetQuadrant), req.Arc is null ? null : Enum.Parse<FiringArc>(req.Arc, true));
         if (result is not null)
             AdvanceUnavailableGunneryTurns(session.Engine);
         return Ok(new { ok = result is not null, result = result?.Description });
@@ -395,7 +398,7 @@ public sealed record MoveRequest(int Q, int R, int Facing);
 public sealed record StuntRequest(string Stunt);
 public sealed record FreeAttackRequest(int? WeaponIndex, int? GunnerIndex);
 public sealed record TurnInPlaceRequest(int Facing);
-public sealed record FireShotRequest(int WeaponIndex, string TargetShipId, string? Arc = null);
+public sealed record FireShotRequest(int WeaponIndex, string TargetShipId, string? Arc = null, Quadrant.RulesEngine.Quadrant? TargetQuadrant = null);
 public sealed record PointDefenseRequest(string ProjectileId, bool Attempt);
 public sealed record RoleAssignmentsRequest(List<ShipRolesRequest> Ships);
 public sealed record ShipRolesRequest(string ShipId, List<string> Roles);

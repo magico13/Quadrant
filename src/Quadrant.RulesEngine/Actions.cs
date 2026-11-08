@@ -30,7 +30,7 @@ public sealed record MoveAction(IReadOnlyList<TurnSegment> Segments)
 /// <summary>
 /// A player's intent for the Gunnery phase: fire a specific weapon at a target.
 /// </summary>
-public sealed record FireAction(int WeaponIndex, string TargetShipId);
+public sealed record FireAction(int WeaponIndex, string TargetShipId, Quadrant? TargetQuadrant = null);
 
 /// <summary>
 /// A player chooses to take no action this phase (e.g. skip firing, or a ship

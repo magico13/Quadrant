@@ -19,11 +19,15 @@ public class SessionPersistenceTests
             session.State.Phase = CombatPhase.Engineering;
             var ship = session.State.Ships[0];
             ship.Systems.ApplyCritical(ShipSystem.Engines);
+            ship.BarrelRolledThisRound = true;
+            ship.BarrelRollActive = true;
             Assert.Null(session.Engine.ApplyEngineering(new EngineerAction("a", 0, "Divert", "Weapons", null)));
             Assert.Null(session.Engine.ApplyEngineering(new EngineerAction("a", 1, "Hold It Together", "Engines", null)));
             manager.Save(session, true);
             var restored = new SessionManager(db).Get(session.RoomCode)!.State.Ships[0];
             Assert.True(restored.DivertWeapons);
+            Assert.True(restored.BarrelRolledThisRound);
+            Assert.True(restored.BarrelRollActive);
             Assert.Equal(ShipSystem.Engines, restored.Systems.HeldSystem);
             Assert.Equal(SystemCondition.None, restored.Systems.GetEffective(ShipSystem.Engines));
             Assert.Contains("Divert", restored.EngineeringActionsUsed);

@@ -13,5 +13,6 @@ public sealed class TrackingProjectile
     public required Weapon Weapon { get; init; }
     public Hex Position { get; set; }
     public Facing Facing { get; set; }
+    public Quadrant? FlybyQuadrant { get; init; }
 
 }
