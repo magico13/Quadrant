@@ -93,7 +93,11 @@ public static class CombatResolver
         target.HullPoints -= hullDamage;
         target.TotalHullDamageTaken += hullDamage;
         if (target.TotalHullDamageTaken > 2 * target.Definition.HullPoints) target.IsDestroyed = true;
-        else if (target.HullPoints <= 0) target.IsDisabled = true;
+        else if (target.HullPoints <= 0)
+        {
+            if (!target.IsDisabled) target.DriftFacing = target.Facing;
+            target.IsDisabled = true;
+        }
 
         int ct = target.Definition.CriticalThreshold;
         int thresholdCrossings = 0;

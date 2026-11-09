@@ -233,6 +233,7 @@ function render() {
         id: s.id, name: s.name, teamId: s.teamId, q: s.q, r: s.r, facing: s.facing,
         hull: s.hull, maxHull: s.maxHull, shields: s.shields, maxShield: s.maxShield,
         isDisabled: s.isDisabled, isDestroyed: s.isDestroyed,
+        barrelRolledThisRound: s.barrelRolledThisRound,
         isActive: s.id === state.currentActorId && ['Helm', 'Gunnery'].includes(state.phase),
     }));
     grid.setShips(ships);
@@ -334,7 +335,7 @@ function renderRoster() {
         const hp = isCombat ? ` <span class="roster-hp">${s.hull}/${s.maxHull}</span>` : '';
         return `<div class="roster-entry${active}${selected}${inactive}" style="--team-color:${teamColor(s.teamId)}" data-ship="${s.id}">
             <span class="roster-dot"></span>
-            <span class="roster-name"><span class="roster-ship-name">${s.name}</span> <small>(Team ${s.teamId + 1})</small></span>${hp}
+            <span class="roster-name"><span class="roster-ship-name${s.barrelRolledThisRound ? ' barrel-rolled' : ''}">${s.name}</span> <small>(Team ${s.teamId + 1})</small></span>${hp}
         </div>`;
     }).join('');
 
@@ -483,7 +484,9 @@ function renderHelm() {
     }
 
     // Highlight every reachable hex (union over facings).
-    grid.setHighlights((state.options?.items || []).map(m => m.position));
+    const moves = state.options?.items || [];
+    grid.setHighlights(moves.filter(m => !m.requiresManeuver).map(m => m.position),
+        moves.filter(m => m.requiresManeuver).map(m => m.position));
     grid.setTargets([]);
 
     const facingNames = ['NW', 'NE', 'E', 'SE', 'SW', 'W'];
@@ -494,16 +497,17 @@ function renderHelm() {
         : null;
     actionPanel.innerHTML = `
         <div class="actor-name" style="color:${teamColor(actor.teamId)}">${actor.name}</div>
+        ${actor.maneuverSucceeded != null ? `<div class="hint">Maneuver ${actor.maneuverSucceeded ? 'succeeded: improved turns available' : 'failed: normal movement only'}. Choose and confirm your move; stunts are unavailable.</div>` : ''}
         ${actor.helmAction === 'Glide' ? '<div class="hint" title="Move up to half speed; +2 distance between turns; add Piloting ranks to AC/TL until next round. Uses a minor crew action.">Glide: half speed, +2 distance between turns; uses a minor crew action.</div>' : actor.helmAction === 'None' ? '<div class="hint">No crew member can move this ship.</div>' : ''}
         ${pending
             ? `<div class="hint">${pending.isTurnInPlace
                     ? `Turning in place to face ${facingNames[pending.finalFacing]}.`
                     : `Moving to (${pending.position.q}, ${pending.position.r}), facing ${facingNames[pending.finalFacing]}.${flybyEnemy ? ` Flyby against ${flybyEnemy.name}.` : ''}`} Click another hex or your ship to change, or confirm.</div>
-               <button class="btn btn-primary" id="btn-confirm-move">Confirm Move</button>
+               ${pending.requiresManeuver ? `<div class="hint">This move requires Maneuver. Attempting it uses the pilot's action and prevents stunts, even if you cancel the move afterward.</div><button class="btn btn-primary" id="btn-attempt-maneuver">Attempt Maneuver (${actor.maneuverChance}%)</button>` : '<button class="btn btn-primary" id="btn-confirm-move">Confirm Move</button>'}
                <button class="btn btn-ghost" id="btn-cancel-move">Cancel</button>`
             : state.pendingStunt
                 ? `<div class="hint">${state.pendingStunt}: choose a highlighted destination to preview the result.</div>${(state.options?.items || []).some(m => m.position.q === actor.q && m.position.r === actor.r) ? '<button class="btn btn-ghost" id="btn-stunt-hold">Preview current hex</button>' : ''}`
-                : `<div class="hint"><span title="Move up to full speed with normal turns.">Click a highlighted hex to preview a move.</span>${actor.helmAction === 'Pilot' ? ' <span title="Turn to any facing without moving. Clumsy: −4 AC/TL until next round. Poor: −2 AC/TL until next round.">Click your own ship to turn in place.</span>' : ''}</div>
+                : `<div class="hint"><span title="Move up to full speed with normal turns.">Click a highlighted hex to preview a move.</span>${actor.maneuverChance != null ? ' Faded blue hexes and facings require a Maneuver check.' : ''}${actor.canTurnInPlace ? ' <span title="Turn to any facing without moving. Clumsy: −4 AC/TL until next round. Poor: −2 AC/TL until next round.">Click your own ship to turn in place.</span>' : ''}</div>
                    <button class="btn btn-ghost" id="btn-hold" title="Stay in the current hex and keep the current facing.">Hold Position</button>
                    ${actor.stuntChances?.backOff != null ? `<div class="detail-section">Stunts</div><button class="btn btn-ghost" data-stunt="Back Off" title="Move backward up to half speed without turning. Failure: move back 1 hex. Fail by 5+: no movement; −4 AC/TL until next round.">Back Off (${actor.stuntChances.backOff}%)</button> <button class="btn btn-ghost" data-stunt="Flip and Burn" title="Move forward up to half speed without turning, then rotate 180°. Failure: move forward up to half speed without rotating.">Flip and Burn (${actor.stuntChances.flipAndBurn}%)</button> <button class="btn btn-ghost" data-stunt="Evade" title="Move up to full speed with normal turns; +2 AC/TL until next round. Failure: normal movement; no bonus. Fail by 5+: normal movement; −2 AC/TL until next round.">Evade (${actor.stuntChances.evade}%)</button> <button class="btn btn-ghost" data-stunt="Slide" title="Move diagonally forward to port or starboard up to full speed without changing facing. Failure: move forward up to half speed without turning.">Slide (${actor.stuntChances.slide}%)</button> ${actor.stuntChances.barrelRoll != null ? `<button class="btn btn-ghost" data-stunt="Barrel Roll" title="Move up to half speed with normal turns; swap port/starboard shields and weapons for Gunnery. Failure: move half speed; no swap. Fail by 5+: move half speed; no swap; −4 AC/TL until next round.">Barrel Roll (${actor.stuntChances.barrelRoll}%)</button>` : ''}` : ''}`}`;
 
@@ -603,7 +607,8 @@ function renderHelm() {
     }
 
     if (pending) {
-        document.getElementById('btn-confirm-move').addEventListener('click', confirmMove);
+        document.getElementById('btn-confirm-move')?.addEventListener('click', confirmMove);
+        document.getElementById('btn-attempt-maneuver')?.addEventListener('click', attemptManeuver);
         document.getElementById('btn-cancel-move').addEventListener('click', () => setPendingMove(null));
     } else {
         document.getElementById('btn-hold')?.addEventListener('click', async () => {
@@ -654,6 +659,22 @@ async function confirmMove() {
     } catch (err) {
         addLog('error', `Move failed: ${err.message}`);
     }
+}
+
+async function attemptManeuver() {
+    const m = pendingMove?.option;
+    if (!m?.requiresManeuver) return;
+    try {
+        const response = await api(`/${roomCode}/maneuver`, { q: m.position.q, r: m.position.r, facing: m.finalFacing });
+        pendingMove = null;
+        grid.setGhost(null);
+        grid.setPath(null);
+        await fetchState();
+        if (response.succeeded) {
+            const option = (state.options?.items || []).find(o => o.position.q === m.position.q && o.position.r === m.position.r && o.finalFacing === m.finalFacing);
+            if (option) setPendingMove(option);
+        }
+    } catch (err) { addLog('error', `Maneuver failed: ${err.message}`); }
 }
 
 // Clockwise direction index (0-5) from one hex to another, or -1 if the same.
@@ -1108,7 +1129,7 @@ grid.onShipClick = (ship) => {
         if (state.pendingStunt) {
             const option = (state.options?.items || []).find(m => m.position.q === ship.q && m.position.r === ship.r);
             if (option) setPendingMove(option);
-        } else if (currentActor()?.helmAction === 'Pilot') showTurnInPlacePicker(ship);
+        } else if (currentActor()?.canTurnInPlace) showTurnInPlacePicker(ship);
         return;
     }
 
@@ -1199,7 +1220,8 @@ function showFacingPicker(title, options, onPick, caption) {
         <div class="facing-ring">
             ${options.map(o => {
                 const hold = o.hold ? ' hold' : '';
-                return `<button class="btn btn-primary facing-btn${hold}" data-f="${o.facing}" style="left:${FACING_RING_POS[o.facing].left}%;top:${FACING_RING_POS[o.facing].top}%">${FACING_NAMES[o.facing]}</button>`;
+                const restricted = o.requiresManeuver ? ' maneuver-required' : '';
+                return `<button class="btn btn-primary facing-btn${hold}${restricted}" data-f="${o.facing}" style="left:${FACING_RING_POS[o.facing].left}%;top:${FACING_RING_POS[o.facing].top}%"${o.requiresManeuver ? ' title="Requires a Maneuver check"' : ''}>${FACING_NAMES[o.facing]}</button>`;
             }).join('')}
         </div>
         ${caption ? `<div class="facing-caption">${caption}</div>` : ''}`;
@@ -1221,8 +1243,9 @@ function showFacingPicker(title, options, onPick, caption) {
 
 function showMoveFacingPicker(matches) {
     showFacingPicker('Choose facing (preview, then confirm):',
-        matches.map(m => ({ facing: m.finalFacing })),
-        facing => setPendingMove(matches.find(m => m.finalFacing === facing)));
+        matches.map(m => ({ facing: m.finalFacing, requiresManeuver: m.requiresManeuver })),
+        facing => setPendingMove(matches.find(m => m.finalFacing === facing)),
+        matches.some(m => m.requiresManeuver) ? 'Faded facings require a Maneuver check.' : undefined);
 }
 
 function showTurnInPlacePicker(ship) {

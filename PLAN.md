@@ -65,7 +65,7 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 
 Already implemented: Fly, all seven core stunts (Back Off, Barrel Roll, Evade, Flip and Burn, Flyby, Slide, Turn In Place), Divert, Hold It Together, Shoot, Balance, Target System, Glide and Snap Shot. Crew roles and action tracking exist, and some push restrictions are enforced; audit these implementations as the remaining rules are added.
 
-- [ ] **Maneuver.** Add the pilot action to reduce distance between turns by 1 on a successful check; keep normal movement on failure.
+- [x] **Maneuver.** Preview additional destinations and facings; attempting a restricted move consumes the pilot action, disables stunts, and rolls to reduce distance between turns by 1. A failed check leaves normal movement available.
 - [ ] **Captain actions.** Add Demand, Encourage and Taunt, then Orders and Moving Speech once advanced crew prerequisites and Resolve are available. Track check bonuses, timed penalties and per-combat limits. Include available captain actions in the Gunnery auto-end decision so a captain can act after the ship fires.
 - [ ] **Engineer actions.** Add Patch, including pooled successful actions and temporary system-condition effects, then Overpower and Quick Fix. Divert already restores shields; system patching is distinct from hull repair.
 - [ ] **Gunner actions.** Add Fire at Will, then Broadside and Precise Targeting. Support multiple shots within one crew action and enforce per-weapon firing limits.
@@ -73,6 +73,7 @@ Already implemented: Fly, all seven core stunts (Back Off, Barrel Roll, Evade, F
 - [ ] **Science officer actions.** Add Lock On and Improve Countermeasures with their rank and Resolve requirements. Scan is deferred until after multiplayer, as described above.
 - [ ] **Ship Resolve and advanced prerequisites.** Each ship has a shared encounter Resolve pool using the NPC ship rule: tier / 5 + 3. Define integer rounding for fractional results when implementing it, persist and reset the pool per encounter, and spend it for eligible actions. Model the character levels and relevant skill ranks needed for advanced actions; allow Orders to grant two different role actions to one crew member.
 - [ ] **Push actions.** Apply the chapter's restrictions consistently: a push action cannot use a malfunctioning or wrecked necessary system.
+- [x] **Disabled ship drift.** At the start of each Helm phase, disabled ships drift up to half their base speed in the facing recorded when they were disabled. They can pass through occupied hexes but stop at the last unoccupied hex within that distance. Drift does not currently prompt free attacks when passing enemy ships; add this to movement interruptions if desired.
 - [ ] **Verification.** For each batch, test eligibility, action consumption, rolls and failure outcomes, damaged systems, effect expiry and session restoration. Test movement interruptions and gunnery interactions for stunts.
 
 ### Weapon Special Tags

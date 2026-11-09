@@ -117,6 +117,60 @@ public class TrackingProjectileTests
         Assert.True(path[^1].Position.DistanceTo(new Hex(0, -5)) < path[0].Position.DistanceTo(new Hex(0, -5)));
     }
 
+    [Fact]
+    public void ProjectileUsesDirectShortestRouteInsteadOfDriftingAlongEqualDistanceHexes()
+    {
+        var (projectile, engine) = MakeScenario(new Hex(0, 0), Facing.East, new Hex(6, -3), speed: 4);
+        var path = engine.GetProjectilePreviewPath(projectile);
+        var visited = path.Select(p => p.Position).Distinct().ToList();
+        Assert.Equal(4, visited.Count);
+        Assert.Equal(new Hex(1, 0), visited[0]);
+        // The direct route alternates between the two hex columns bordering
+        // the line rather than first following one axis to its extreme.
+        Assert.All(visited, hex => Assert.InRange(Math.Abs(hex.Q + 2 * hex.R), 0, 1));
+        Assert.Equal(2, path[^1].Position.DistanceTo(new Hex(6, -3)));
+    }
+
+    [Fact]
+    public void ProjectileCanInitiallyMoveAwayWhenItsFacingRequiresIt()
+    {
+        var (projectile, engine) = MakeScenario(new Hex(0, 0), Facing.West, new Hex(3, 0), speed: 8);
+        var path = engine.GetProjectilePreviewPath(projectile);
+        Assert.Equal(new Hex(-1, 0), path[0].Position);
+        Assert.Equal(new Hex(3, 0), path[^1].Position);
+        Assert.Contains(path.Zip(path.Skip(1)), p => p.First.Position == p.Second.Position);
+        var steps = path.Prepend(new CombatEngine.PathStep(projectile.Position, projectile.Facing)).ToList();
+        int turns = 0;
+        foreach (var pair in steps.Zip(steps.Skip(1)))
+        {
+            if (pair.First.Position == pair.Second.Position)
+            {
+                turns++;
+                Assert.InRange(turns, 1, 2);
+            }
+            else
+            {
+                Assert.Equal(pair.First.Position.Neighbor(pair.Second.Facing), pair.Second.Position);
+                turns = 0;
+            }
+        }
+    }
+
+    [Fact]
+    public void ProjectilePassesThroughShipsButDoesNotEndOnOne()
+    {
+        var (projectile, engine) = MakeScenario(new Hex(0, 0), Facing.East, new Hex(5, 0), speed: 2);
+        var blocker = engine.State.Ships[0].Definition.Instantiate("blocker", new Hex(2, 0), Facing.East, 1);
+        engine.State.Ships.Add(blocker);
+        Assert.Equal(new Hex(1, 0), engine.GetProjectilePreviewPath(projectile)[^1].Position);
+        projectile = new TrackingProjectile { Id = projectile.Id, Name = projectile.Name, TeamId = projectile.TeamId,
+            OwnerShipId = projectile.OwnerShipId, TargetShipId = projectile.TargetShipId, Position = projectile.Position,
+            Facing = projectile.Facing, Speed = 3, GunnerBonus = projectile.GunnerBonus, Weapon = projectile.Weapon };
+        var path = engine.GetProjectilePreviewPath(projectile);
+        Assert.Contains(path, step => step.Position == blocker.Position);
+        Assert.Equal(new Hex(3, 0), path[^1].Position);
+    }
+
     private static (TrackingProjectile Projectile, CombatEngine Engine) MakeScenario(Hex position, Facing facing, Hex targetPosition, int speed)
     {
         var targetDefinition = new ShipDefinition

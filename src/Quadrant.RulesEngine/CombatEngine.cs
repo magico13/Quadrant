@@ -246,6 +246,7 @@ public sealed class CombatEngine
         {
             case CombatPhase.Engineering:
                 _state.Phase = CombatPhase.Helm;
+                DriftDisabledShips();
                 ComputeActionOrder();
                 LastEvents.Add(new CombatEvent("Helm", "", $"Round {_state.Round} — Helm phase. Order: {string.Join(" → ", _state.ActionOrder.Select(id => _state.GetShip(id)?.Name ?? id))}."));
                 break;
@@ -263,6 +264,31 @@ public sealed class CombatEngine
                 if (ResolveAutomaticPointDefense()) return;
                 FinishGunneryResolution();
                 break;
+        }
+    }
+
+    /// <summary>Drift disabled ships once at Helm entry, before active ships move.</summary>
+    private void DriftDisabledShips()
+    {
+        foreach (var ship in _state.Ships.Where(s => s.IsDisabled && !s.IsDestroyed && s.LastDriftRound != _state.Round))
+        {
+            ship.DriftFacing ??= ship.Facing; // Backward compatibility for saved games.
+            ship.LastDriftRound = _state.Round;
+            var start = ship.Position;
+            var destination = start;
+            int distance = Math.Max(0, ship.Definition.Speed / 2);
+            var occupied = _state.Ships.Where(s => s.InstanceId != ship.InstanceId && !s.IsDestroyed)
+                .Select(s => s.Position).ToHashSet();
+            // Ships can pass through occupied hexes, but cannot end there.
+            for (int step = 1; step <= distance; step++)
+            {
+                var candidate = start.Step((int)ship.DriftFacing.Value, step);
+                if (!occupied.Contains(candidate)) destination = candidate;
+            }
+            ship.Position = destination;
+            int moved = start.DistanceTo(destination);
+            LastEvents.Add(new CombatEvent("Helm", ship.InstanceId,
+                $"{ShipLogName(ship)} drifts {moved} hex{(moved == 1 ? "" : "es")} to {destination}, toward {ship.DriftFacing}."));
         }
     }
 
@@ -359,6 +385,7 @@ public sealed class CombatEngine
     {
         if (HasPendingFreeAttack) return MoveValidationResult.Fail("Resolve the free attack first.");
         if (PendingStunt is not null) return MoveValidationResult.Fail("Finish the selected stunt first.");
+        if (_state.CurrentActor?.ManeuverSucceeded is not null) return MoveValidationResult.Fail("Finish the Maneuver using a movement destination.");
         var ship = _state.CurrentActor;
         if (ship is null || _state.Phase != CombatPhase.Helm)
             return MoveValidationResult.Fail("No ship to move.");
@@ -404,8 +431,18 @@ public sealed class CombatEngine
     /// Clumsy ships take –4 AC/TL; poor ships take –2 AC/TL until next round.
     /// This replaces ordinary movement for the round.
     /// </summary>
+    public bool CanTurnInPlace(ShipInstance ship)
+    {
+        ship.InitializeCrewRoles();
+        int pilot = ship.CrewRoles.IndexOf("Pilot");
+        return ship.ManeuverSucceeded is null &&
+            (ship.Definition.Crew.Count == 0 || (pilot >= 0 && !ship.CrewActionsUsed.Contains(pilot))) &&
+            ship.Systems.GetEffective(ShipSystem.Engines) is not (SystemCondition.Malfunctioning or SystemCondition.Wrecked);
+    }
+
     public MoveValidationResult TryTurnInPlace(Facing facing)
     {
+        if (_state.CurrentActor?.ManeuverSucceeded is not null) return MoveValidationResult.Fail("Maneuver has already been attempted; stunts are unavailable.");
         if (HasPendingFreeAttack) return MoveValidationResult.Fail("Resolve the free attack first.");
         if (PendingStunt is not null) return MoveValidationResult.Fail("Finish the selected stunt first.");
         var ship = _state.CurrentActor;
@@ -415,6 +452,8 @@ public sealed class CombatEngine
         ship.InitializeCrewRoles();
         if (ship.Definition.Crew.Count > 0 && !ship.CrewRoles.Contains("Pilot"))
             return MoveValidationResult.Fail("Turning in place requires a pilot; Glide cannot perform stunts.");
+        if (ship.Definition.Crew.Count > 0 && ship.CrewActionsUsed.Contains(ship.CrewRoles.IndexOf("Pilot")))
+            return MoveValidationResult.Fail("Turning in place requires an available pilot.");
         if (ship.Systems.GetEffective(ShipSystem.Engines) is SystemCondition.Malfunctioning or SystemCondition.Wrecked)
             return MoveValidationResult.Fail("Turning in place is a push action and requires working engines.");
 
@@ -642,6 +681,7 @@ public sealed class CombatEngine
 
     public MoveValidationResult StartStunt(string stunt)
     {
+        if (_state.CurrentActor?.ManeuverSucceeded is not null) return MoveValidationResult.Fail("Maneuver has already been attempted; stunts are unavailable.");
         if (HasPendingFreeAttack) return MoveValidationResult.Fail("Resolve the free attack first.");
         var ship = _state.CurrentActor;
         if (ship is null || _state.Phase != CombatPhase.Helm) return MoveValidationResult.Fail("No ship to move.");
@@ -972,7 +1012,7 @@ public sealed class CombatEngine
     /// <summary>A valid destination for the current actor's helm move.</summary>
     /// <param name="Path">The hexes the ship travels through, from its start hex to <see cref="Position"/>.</param>
     public sealed record PathStep(Hex Position, Facing Facing);
-    public sealed record MoveOption(Hex Position, Facing FinalFacing, IReadOnlyList<PathStep> Path);
+    public sealed record MoveOption(Hex Position, Facing FinalFacing, IReadOnlyList<PathStep> Path, bool RequiresManeuver = false);
 
     /// <summary>
     /// Computes all reachable (position, facing) outcomes for the current actor's movement,
@@ -981,24 +1021,25 @@ public sealed class CombatEngine
     /// enforcing speed, distance-between-turns, grid bounds, and no ending on an occupied hex.
     /// Passing through occupied hexes is allowed; only the final position must be clear.
     /// </summary>
-    private Dictionary<(Hex Pos, Facing Facing), List<PathStep>> _ComputeReachable(ShipInstance? requestedShip = null, Hex? allowOccupiedTarget = null, int? speedLimit = null, bool requireFullSpeed = false, bool flyby = false)
+    private Dictionary<(Hex Pos, Facing Facing), List<PathStep>> _ComputeReachable(ShipInstance? requestedShip = null, Hex? allowOccupiedTarget = null, int? speedLimit = null, bool requireFullSpeed = false, bool flyby = false, int turnReduction = 0)
     {
         var ship = requestedShip ?? _state.CurrentActor;
         if (ship is null || (requestedShip is null && _state.Phase != CombatPhase.Helm)) return new();
 
         ship.InitializeCrewRoles();
-        bool glide = requestedShip is null && ship.Definition.Crew.Count > 0 && !ship.CrewRoles.Contains("Pilot");
-        if (glide && ship.AvailableMinorCrew() < 0) return new();
+        bool glide = requestedShip is null && ship.Definition.Crew.Count > 0 &&
+            (!ship.CrewRoles.Contains("Pilot") || ship.Systems.GetEffective(ShipSystem.Engines) == SystemCondition.Wrecked);
+        if (glide && ship.AvailableGlideCrew() < 0) return new();
         if (requestedShip is null && !glide && ship.Systems.GetEffective(ShipSystem.Engines) == SystemCondition.Wrecked) return new();
         int speed = speedLimit ?? (glide ? ship.Speed / 2 : ship.Speed);
-        int minBetweenTurns = ship.Definition.DistanceBetweenTurns + (glide ? 2 : 0);
+        int minBetweenTurns = Math.Max(0, ship.Definition.DistanceBetweenTurns + (glide ? 2 : 0) - turnReduction);
         var occupied = new HashSet<Hex>(_state.Ships
             .Where(s => s.InstanceId != ship.InstanceId && !s.IsDestroyed)
             .Select(s => s.Position));
 
         // BFS state is (pos, facing, sinceTurn, consecutiveTurns); remaining movement rides along.
         // maxConsecutiveTurns: perfect maneuverability allows 2 turns at a single point; others allow 1.
-        int maxConsecutiveTurns = minBetweenTurns == 0 ? 2 : 1;
+        int maxConsecutiveTurns = minBetweenTurns == 0 && ship.Maneuverability == Maneuverability.Perfect ? 2 : 1;
 
         // Keep remaining speed in the state: a safer route may be longer but
         // still leave enough movement to reach the requested destination.
@@ -1062,28 +1103,132 @@ public sealed class CombatEngine
 
     /// <summary>All valid (position, facing) outcomes for the current actor's helm move, with routes.</summary>
     public List<MoveOption> GetValidMoves()
-        => _stuntMoves ?? _ComputeReachable().Select(kv => new MoveOption(kv.Key.Pos, kv.Key.Facing, kv.Value)).ToList();
+        => _stuntMoves ?? _ComputeReachable(turnReduction: _state.CurrentActor?.ManeuverSucceeded == true ? 1 : 0)
+            .Select(kv => new MoveOption(kv.Key.Pos, kv.Key.Facing, kv.Value)).ToList();
+
+    public int? GetManeuverChance(ShipInstance ship)
+    {
+        ship.InitializeCrewRoles();
+        int pilot = ship.CrewRoles.IndexOf("Pilot");
+        if (pilot < 0 || ship.ManeuverSucceeded is not null || ship.CrewActionsUsed.Contains(pilot) ||
+            ship.Systems.GetEffective(ShipSystem.Engines) == SystemCondition.Wrecked || ship.Definition.DistanceBetweenTurns == 0)
+            return null;
+        return Math.Clamp(21 - (int)Math.Floor(15 + 1.5 * ship.Definition.Tier) + StuntBonus(ship, pilot), 0, 20) * 5;
+    }
+
+    public List<MoveOption> GetMovementPreviews()
+    {
+        var normal = GetValidMoves();
+        var ship = _state.CurrentActor;
+        if (ship is null || PendingStunt is not null || HasPendingFreeAttack || GetManeuverChance(ship) is null) return normal;
+        var known = normal.Select(m => (m.Position, m.FinalFacing)).ToHashSet();
+        normal.AddRange(_ComputeReachable(turnReduction: 1).Where(kv => !known.Contains(kv.Key))
+            .Select(kv => new MoveOption(kv.Key.Pos, kv.Key.Facing, kv.Value, true)));
+        return normal;
+    }
+
+    public string? AttemptManeuver(Hex destination, Facing facing)
+    {
+        var ship = _state.CurrentActor;
+        if (ship is null || _state.Phase != CombatPhase.Helm || PendingStunt is not null || HasPendingFreeAttack)
+            return "Maneuver is unavailable right now.";
+        if (GetManeuverChance(ship) is null) return "No available pilot can attempt Maneuver.";
+        if (!GetMovementPreviews().Any(m => m.Position == destination && m.FinalFacing == facing && m.RequiresManeuver))
+            return "Select a destination and facing that requires Maneuver.";
+        int pilot = ship.CrewRoles.IndexOf("Pilot");
+        int roll = _dice.RollD20(), bonus = StuntBonus(ship, pilot);
+        int dc = (int)Math.Floor(15 + 1.5 * ship.Definition.Tier);
+        ship.ManeuverSucceeded = roll + bonus >= dc;
+        ship.CrewActionsUsed.Add(pilot);
+        LastEvents.Add(new CombatEvent("Helm", ship.InstanceId,
+            $"{ShipLogName(ship)} attempts Maneuver: {CombatResolver.FormatCheck(roll, bonus, roll + bonus)} vs DC {dc} — {(ship.ManeuverSucceeded.Value ? "SUCCESS; distance between turns reduced by 1" : "FAIL; normal movement")}."));
+        return null;
+    }
 
     /// <summary>Returns the next turn-limited route a tracking projectile can make toward its target.</summary>
     public List<PathStep> GetProjectilePreviewPath(TrackingProjectile projectile)
     {
         var target = _state.GetShip(projectile.TargetShipId);
-        if (target is null || projectile.Position == target.Position) return [];
-        var definition = new ShipDefinition
+        if (target is null || projectile.Position == target.Position || projectile.Speed <= 0) return [];
+
+        // A projectile moves forward first, then can turn up to twice at each
+        // hex. Search position and facing to find a shortest turn-valid route.
+        var start = (Pos: projectile.Position.Neighbor(projectile.Facing), Facing: projectile.Facing);
+        var queue = new PriorityQueue<(Hex Pos, Facing Facing), (int Estimate, double LineError, int Turns, long Order)>();
+        var costs = new Dictionary<(Hex Pos, Facing Facing), (int Distance, double LineError, int Turns)>();
+        var parents = new Dictionary<(Hex Pos, Facing Facing), ((Hex Pos, Facing Facing) Previous, int Turn)?>();
+        long order = 0;
+
+        // Axial coordinates mapped to a pointy-top plane (without the common
+        // sqrt(3) factor). This cross product ranks equally short routes by
+        // how closely they follow the direct line to the target.
+        double LineError(Hex pos)
         {
-            Id = projectile.Id, Name = projectile.Name, Speed = projectile.Speed,
-            Maneuverability = Maneuverability.Perfect, HullPoints = 1,
-            Shields = new QuadrantShields()
-        };
-        var projectileShip = definition.Instantiate(projectile.Id, projectile.Position, projectile.Facing, projectile.TeamId);
-        var routes = _ComputeReachable(projectileShip, target.Position);
-        var route = routes
-            .Where(kv => kv.Value.Any(step => step.Position != projectile.Position))
-            .OrderBy(kv => kv.Key.Pos.DistanceTo(target.Position))
-            .ThenBy(kv => kv.Value.Count)
-            .Select(kv => kv.Value)
-            .FirstOrDefault();
-        return route is null ? [] : route.Skip(1).ToList();
+            double dx = target.Position.Q - projectile.Position.Q + (target.Position.R - projectile.Position.R) / 2.0;
+            double dy = (target.Position.R - projectile.Position.R) * Math.Sqrt(3) / 2;
+            double px = pos.Q - projectile.Position.Q + (pos.R - projectile.Position.R) / 2.0;
+            double py = (pos.R - projectile.Position.R) * Math.Sqrt(3) / 2;
+            return Math.Abs(dx * py - dy * px);
+        }
+
+        var startCost = (Distance: 1, LineError: LineError(start.Pos), Turns: 0);
+        costs[start] = startCost;
+        parents[start] = null;
+        queue.Enqueue(start, (1 + start.Pos.DistanceTo(target.Position), startCost.LineError, 0, order++));
+        (Hex Pos, Facing Facing)? goal = null;
+        while (queue.TryDequeue(out var current, out var priority))
+        {
+            var cost = costs[current];
+            if (priority.Estimate != cost.Distance + current.Pos.DistanceTo(target.Position) ||
+                priority.LineError != cost.LineError || priority.Turns != cost.Turns) continue;
+            if (current.Pos == target.Position) { goal = current; break; }
+
+            foreach (int turn in new[] { 0, -1, 1, -2, 2 })
+            {
+                var facing = (Facing)(((int)current.Facing + turn + Hex.DirectionCount) % Hex.DirectionCount);
+                var next = (Pos: current.Pos.Neighbor(facing), Facing: facing);
+                var nextCost = (Distance: cost.Distance + 1, LineError: cost.LineError + LineError(next.Pos), Turns: cost.Turns + Math.Abs(turn));
+                if (costs.TryGetValue(next, out var previous) && previous.CompareTo(nextCost) <= 0) continue;
+                costs[next] = nextCost;
+                parents[next] = (current, turn);
+                queue.Enqueue(next, (nextCost.Distance + next.Pos.DistanceTo(target.Position), nextCost.LineError, nextCost.Turns, order++));
+            }
+        }
+        if (goal is null) return [];
+
+        var transitions = new List<((Hex Pos, Facing Facing) State, int Turn)>();
+        var cursor = goal.Value;
+        while (parents[cursor] is { } parent)
+        {
+            transitions.Add((cursor, parent.Turn));
+            cursor = parent.Previous;
+        }
+        transitions.Reverse();
+        var path = new List<PathStep> { new(start.Pos, start.Facing) };
+        var position = start.Pos;
+        var currentFacing = start.Facing;
+        int moved = 1;
+        foreach (var transition in transitions)
+        {
+            // Turns after the last hex are included so the next round starts
+            // with the heading selected for this route.
+            for (int i = 0; i < Math.Abs(transition.Turn); i++)
+            {
+                currentFacing = (Facing)(((int)currentFacing + Math.Sign(transition.Turn) + Hex.DirectionCount) % Hex.DirectionCount);
+                path.Add(new PathStep(position, currentFacing));
+            }
+            if (moved == projectile.Speed) break;
+            position = transition.State.Pos;
+            path.Add(new PathStep(position, currentFacing));
+            moved++;
+        }
+
+        // Preserve the existing rule that a projectile cannot finish its move
+        // on another ship, while allowing it to pass through occupied hexes.
+        var occupied = _state.Ships.Where(s => !s.IsDestroyed && s.InstanceId != target.InstanceId)
+            .Select(s => s.Position).ToHashSet();
+        while (path.Count > 0 && occupied.Contains(path[^1].Position)) path.RemoveAt(path.Count - 1);
+        return path;
     }
 
     /// <summary>Projectiles and paths currently useful to render on the combat map.</summary>
@@ -1151,17 +1296,18 @@ public sealed class CombatEngine
             BeginCommittedMove(option);
             return MoveValidationResult.Ok(position, facing);
         }
-        if (!_ComputeReachable().TryGetValue((position, facing), out var path))
+        if (!_ComputeReachable(turnReduction: ship.ManeuverSucceeded == true ? 1 : 0).TryGetValue((position, facing), out var path))
             return MoveValidationResult.Fail("That hex/facing is not reachable with this ship's movement.");
 
         ship.InitializeCrewRoles();
         if (ship.Definition.Crew.Count > 0)
         {
             int pilot = ship.CrewRoles.IndexOf("Pilot");
-            if (pilot >= 0) ship.CrewActionsUsed.Add(pilot);
+            bool glide = pilot < 0 || ship.Systems.GetEffective(ShipSystem.Engines) == SystemCondition.Wrecked;
+            if (!glide) ship.CrewActionsUsed.Add(pilot);
             else
             {
-                int crew = ship.AvailableMinorCrew();
+                int crew = ship.AvailableGlideCrew();
                 if (crew < 0) return MoveValidationResult.Fail("No crew member can glide.");
                 ship.CrewMinorActionsUsed.Add(crew);
                 ship.RoundAcTlModifier += ship.Definition.Crew[crew].Ranks;

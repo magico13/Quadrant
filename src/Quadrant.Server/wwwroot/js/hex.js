@@ -79,6 +79,7 @@ class HexGrid {
         this.ships = [];         // [{id, q, r, facing, teamId, name, hull, maxHull, shields:{...}}]
         this.projectiles = [];
         this.highlightHexes = new Set();   // movement highlights (blue)
+        this.restrictedHexes = new Set();
         this.rangeHexes = new Map();      // gunnery range: key -> band (1..3), faded per increment
         this.selectedShipId = null;
         this.targets = new Map(); // id -> hitChance (percent) for valid gunnery targets
@@ -247,10 +248,10 @@ class HexGrid {
 
     setShips(ships) { this.ships = ships; this.draw(); }
     setProjectiles(projectiles) { this.projectiles = projectiles; this.draw(); }
-    setHighlights(hexes) { this.highlightHexes = new Set(hexes.map(h => `${h.q},${h.r}`)); this.rangeHexes.clear(); this.draw(); }
+    setHighlights(hexes, restricted = []) { this.highlightHexes = new Set(hexes.map(h => `${h.q},${h.r}`)); this.restrictedHexes = new Set(restricted.map(h => `${h.q},${h.r}`)); this.rangeHexes.clear(); this.draw(); }
     // Warm-colored hexes for gunnery range (kept separate from movement highlights).
     // Each hex may carry a `band` (1..3); the renderer fades each band.
-    setRangeHexes(hexes) { this.rangeHexes = new Map(hexes.map(h => [`${h.q},${h.r}`, h.band || 1])); this.highlightHexes.clear(); this.draw(); }
+    setRangeHexes(hexes) { this.rangeHexes = new Map(hexes.map(h => [`${h.q},${h.r}`, h.band || 1])); this.highlightHexes.clear(); this.restrictedHexes.clear(); this.draw(); }
     // Set the warm range overlay without touching movement highlights — used by the
     // ship-details weapon hover so it can layer over Helm-phase move previews.
     setRangeHexesOnly(hexes) { this.rangeHexes = new Map(hexes.map(h => [`${h.q},${h.r}`, h.band || 1])); this.draw(); }
@@ -321,6 +322,10 @@ class HexGrid {
                     ctx.fillStyle = `rgba(255,138,42,${fillA})`;
                     ctx.fill();
                     ctx.strokeStyle = `rgba(255,138,42,${strokeA})`;
+                } else if (this.restrictedHexes.has(key) && !isHighlight) {
+                    ctx.fillStyle = 'rgba(79,195,247,0.06)';
+                    ctx.fill();
+                    ctx.strokeStyle = 'rgba(79,195,247,0.4)';
                 } else if (isHighlight) {
                     ctx.fillStyle = 'rgba(79,195,247,0.18)';
                     ctx.fill();
@@ -548,7 +553,14 @@ class HexGrid {
         ctx.textAlign = 'center';
         ctx.fillStyle = '#d5deea';
         ctx.globalAlpha = opacity * 0.9;
-        ctx.fillText(ship.name, x, y + r + 16);
+        if (ship.barrelRolledThisRound) {
+            ctx.translate(x, y + r + 12);
+            ctx.rotate(Math.PI);
+            ctx.textBaseline = 'middle';
+            ctx.fillText(ship.name, 0, 0);
+        } else {
+            ctx.fillText(ship.name, x, y + r + 16);
+        }
         ctx.restore();
 
         // Valid gunnery target: pulsing ring + hit-chance badge.

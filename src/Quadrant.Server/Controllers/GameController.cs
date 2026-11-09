@@ -80,7 +80,7 @@ public class GameController : ControllerBase
         // Phase-specific helper data for the client UI.
         object? options = null;
         if (state.Phase == CombatPhase.Helm && state.CurrentActor is not null && !engine.HasPendingFreeAttack)
-            options = new { type = "moves", items = engine.GetValidMoves().Select(m => new { position = new { q = m.Position.Q, r = m.Position.R }, finalFacing = (int)m.FinalFacing, path = m.Path.Select(h => new { q = h.Position.Q, r = h.Position.R }).ToList() }) };
+            options = new { type = "moves", items = engine.GetMovementPreviews().Select(m => new { position = new { q = m.Position.Q, r = m.Position.R }, finalFacing = (int)m.FinalFacing, requiresManeuver = m.RequiresManeuver, path = m.Path.Select(h => new { q = h.Position.Q, r = h.Position.R }).ToList() }) };
         else if (state.Phase == CombatPhase.Gunnery && state.CurrentActor is not null)
             options = new { type = "targets", items = engine.GetValidTargets() };
 
@@ -143,6 +143,9 @@ public class GameController : ControllerBase
                 isDestroyed = s.IsDestroyed,
                 isDisabled = s.IsDisabled,
                 barrelRollActive = s.BarrelRollActive,
+                barrelRolledThisRound = s.BarrelRolledThisRound,
+                maneuverSucceeded = s.ManeuverSucceeded,
+                maneuverChance = engine.GetManeuverChance(s),
                 flybyTargetId = s.FlybySucceeded && s.FlybyCrossed ? s.FlybyTargetId : null,
                 flybyFiringArc = s.FlybyFiringArc,
                 shields = new { forward = s.Shields.Forward, starboard = s.BarrelRollActive ? s.Shields.Port : s.Shields.Starboard, aft = s.Shields.Aft, port = s.BarrelRollActive ? s.Shields.Starboard : s.Shields.Port },
@@ -172,7 +175,10 @@ public class GameController : ControllerBase
                         engineeringChances = role == "Engineer" ? new { divert = engine.GetEngineeringSuccessChance(s, i, "Divert"), hold = engine.GetEngineeringSuccessChance(s, i, "Hold It Together") } : null,
                         scienceChances = role == "Science Officer" ? new { balance = engine.GetScienceSuccessChance(s, i), targets = state.Ships.Where(t => t.TeamId != s.TeamId && !t.IsDestroyed).ToDictionary(t => t.InstanceId, t => engine.GetScienceSuccessChance(s, i, t)) } : null };
                 }),
-                helmAction = s.Definition.Crew.Count == 0 || s.CrewRoles.Contains("Pilot") ? "Pilot" : s.AvailableMinorCrew() >= 0 ? "Glide" : "None",
+                helmAction = s.Definition.Crew.Count == 0 ? "Pilot" :
+                    (!s.CrewRoles.Contains("Pilot") || s.Systems.GetEffective(ShipSystem.Engines) == SystemCondition.Wrecked)
+                        ? s.AvailableGlideCrew() >= 0 ? "Glide" : "None" : "Pilot",
+                canTurnInPlace = engine.CanTurnInPlace(s),
                 stuntChances = new { backOff = engine.GetStuntSuccessChance(s, "Back Off"), flipAndBurn = engine.GetStuntSuccessChance(s, "Flip and Burn"), evade = engine.GetStuntSuccessChance(s, "Evade"), slide = engine.GetStuntSuccessChance(s, "Slide"), barrelRoll = engine.GetStuntSuccessChance(s, "Barrel Roll") },
                 gunneryAction = s.Definition.Crew.Count == 0 || s.AvailableGunner() >= 0 ? "Gunner" : !s.GunnerActionTaken && s.AvailableMinorCrew() >= 0 ? "Snap Shot" : "None",
                 crewShotsRemaining = s.RemainingGunneryActions(),
@@ -275,6 +281,15 @@ public class GameController : ControllerBase
         return result.IsValid
             ? Ok(new { ok = true })
             : BadRequest(new { error = result.Error });
+    }
+
+    [HttpPost("{roomCode}/maneuver")]
+    public IActionResult Maneuver(string roomCode, [FromBody] MoveRequest req)
+    {
+        var session = _sessions.Get(roomCode);
+        if (session is null) return NotFound(new { error = "Game not found." });
+        var error = session.Engine.AttemptManeuver(new Hex(req.Q, req.R), (Facing)req.Facing);
+        return error is null ? Ok(new { succeeded = session.State.CurrentActor!.ManeuverSucceeded }) : BadRequest(new { error });
     }
 
     /// <summary>Helm: skip the current actor's movement.</summary>

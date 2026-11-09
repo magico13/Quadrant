@@ -64,9 +64,10 @@ public class EngineeringTests
         var engine = new CombatEngine(state, new FixedDice());
         Assert.Null(engine.ApplyEngineering(new EngineerAction("a", 1, "Hold It Together", "Engines", null)));
         state.Phase = CombatPhase.Helm;
-        Assert.Contains(engine.GetValidMoves(), move => move.Position == new Hex(1, 0));
+        Assert.Contains(engine.GetValidMoves(), move => move.Position == new Hex(6, 0));
         ship.BeginRound();
-        Assert.Empty(engine.GetValidMoves());
+        Assert.Contains(engine.GetValidMoves(), move => move.Position == new Hex(3, 0));
+        Assert.DoesNotContain(engine.GetValidMoves(), move => move.Position == new Hex(4, 0));
     }
 
     [Fact]

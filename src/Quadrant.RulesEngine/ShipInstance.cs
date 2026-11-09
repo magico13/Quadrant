@@ -37,6 +37,11 @@ public sealed class ShipInstance
     /// <summary>True when damage exceeded 2× max hull (ship is destroyed).</summary>
     public bool IsDestroyed { get; set; }
 
+    /// <summary>Facing when disabled, used as the direction of automatic drift.</summary>
+    public Facing? DriftFacing { get; set; }
+    /// <summary>Round in which this ship last drifted, including a blocked drift.</summary>
+    public int? LastDriftRound { get; set; }
+
     // --- Critical damage tracking ---
 
     /// <summary>Total cumulative hull damage taken (for critical threshold checks).</summary>
@@ -93,6 +98,8 @@ public sealed class ShipInstance
     public HashSet<int> CrewActionsUsed { get; } = [];
     public HashSet<int> CrewMinorActionsUsed { get; } = [];
     public bool GunnerActionTaken { get; set; }
+    /// <summary>Null before a Maneuver attempt; otherwise its result for this round.</summary>
+    public bool? ManeuverSucceeded { get; set; }
 
     public int AvailableGunner()
     {
@@ -116,6 +123,19 @@ public sealed class ShipInstance
         for (int i = 0; i < CrewRoles.Count; i++)
             if (!CrewMinorActionsUsed.Contains(i)) return i;
         return -1;
+    }
+
+    /// <summary>Glide is available without a pilot or when wrecked engines prevent Fly.</summary>
+    public int AvailableGlideCrew()
+    {
+        InitializeCrewRoles();
+        int pilot = CrewRoles.IndexOf("Pilot");
+        if (pilot >= 0)
+        {
+            if (Systems.GetEffective(ShipSystem.Engines) != SystemCondition.Wrecked || CrewActionsUsed.Contains(pilot)) return -1;
+            if (!CrewMinorActionsUsed.Contains(pilot)) return pilot;
+        }
+        return AvailableMinorCrew();
     }
 
     public int CrewBonus(int index, string skill, string role)
@@ -268,6 +288,7 @@ public sealed class ShipInstance
     public void BeginRound()
     {
         CrewActionsUsed.Clear();
+        ManeuverSucceeded = null;
         CrewMinorActionsUsed.Clear();
         GunnerActionTaken = false;
         DivertEngines = DivertWeapons = DivertScience = false;
