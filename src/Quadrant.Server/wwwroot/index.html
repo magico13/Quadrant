@@ -63,6 +63,12 @@
 
     <script src="js/hex.js"></script>
     <script src="js/ship-schematic.js"></script>
+    <!-- Client modules share the classic-script global scope; load before the game bootstrap. -->
+    <script src="js/game-setup.js"></script>
+    <script src="js/game-ship-ui.js"></script>
+    <script src="js/game-engineering.js"></script>
+    <script src="js/game-helm.js"></script>
+    <script src="js/game-gunnery.js"></script>
     <script src="js/game.js"></script>
 </body>
 </html>
