@@ -166,7 +166,7 @@ public class SessionPersistenceTests
             Assert.Empty(reloaded.Engine.GetValidTargets());
             reloaded.Engine.EndGunneryTurn();
             reloaded.Engine.EndGunneryTurn();
-            Assert.Contains(reloaded.Engine.LastEvents, e => e.Message.Contains("takes damage"));
+            Assert.Contains(reloaded.Engine.LastEvents, e => e.Message.Contains("4 dmg (4 shield, 0 hull)"));
         }
         finally { if (File.Exists(db)) File.Delete(db); }
     }

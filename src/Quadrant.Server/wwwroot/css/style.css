@@ -232,6 +232,9 @@ select option { background: var(--panel); color: var(--text); }
     overflow-y: auto;
     overflow-x: hidden;
 }
+#action-panel > :not(.crew-roles-list) {
+    flex-shrink: 0;
+}
 .crew-roles-list {
     overflow-y: auto;
     overflow-x: hidden;

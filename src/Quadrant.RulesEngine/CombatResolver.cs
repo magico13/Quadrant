@@ -75,14 +75,14 @@ public static class CombatResolver
         if (!hit)
         {
             return new(false, roll, bonus, total, defenseValue, defenseName, 0,
-                $"Gunnery {FormatCheck(roll, bonus, total)} vs {defenseName} {defenseValue} — MISS.");
+                $"{FormatCheck(roll, bonus, total)} vs {defenseName} {defenseValue} — MISS.");
         }
 
         bool shouldRollDamage = rollDamage && weapon.Type != WeaponType.Tracking;
         int damage = shouldRollDamage ? weapon.Damage.Roll(dice) : 0;
         string natural = roll == 20 && total < defenseValue ? " (natural 20 hits automatically)" : "";
         return new(true, roll, bonus, total, defenseValue, defenseName, damage,
-            $"Gunnery {FormatCheck(roll, bonus, total)} vs {defenseName} {defenseValue} — HIT{natural}." + (shouldRollDamage ? $" {damage} damage rolled." : ""));
+            $"{FormatCheck(roll, bonus, total)} vs {defenseName} {defenseValue} — HIT{natural}." + (shouldRollDamage ? $" {damage} damage rolled." : ""));
     }
 
     public static DamageResolution ApplyDamage(ShipInstance target, Quadrant quadrant, int rawDamage, int attackRoll, IDiceRoller dice, ShipSystem? targetedSystem = null)
@@ -118,7 +118,8 @@ public static class CombatResolver
                 ? new CriticalDamageEffect(available, target.Systems.ApplyCritical(available))
                 : new CriticalDamageEffect(null, null));
         }
-        string description = $"{rawDamage} dmg ({shieldDamage} shield, {hullDamage} hull)";
+        string description = $"{rawDamage} dmg ({shieldDamage} shield, {hullDamage} hull" +
+            (overflow > 0 && hullDamage == 0 ? $", {overflow} stopped by DT {target.Definition.DamageThreshold}" : "") + ")";
         foreach (var effect in effects)
             description += effect.System is null
                 ? $". CRITICAL: crew injury requires manual resolution ({hullDamage} damage, DC 20 Reflex for half)!"

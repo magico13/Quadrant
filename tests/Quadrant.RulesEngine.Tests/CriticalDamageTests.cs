@@ -169,13 +169,13 @@ public class CriticalDamageTests
         engine.ApplyGunneryTurn([new FireAction(0, "second")]);
         Assert.Equal(4, second.HullPoints);
         engine.ApplyGunneryTurn([new FireAction(0, "first")]);
-        Assert.Contains(engine.LastEvents, e => e.Message.Contains("first (Team 1) fires Test Cannon at second (Team 2):") && e.Message.Contains("HIT"));
-        Assert.Contains(engine.LastEvents, e => e.Message.Contains("second (Team 2) fires Test Cannon at first (Team 1):") && e.Message.Contains("HIT"));
+        Assert.Contains(engine.LastEvents, e => e.Message.Contains("first (T1) → second (T2) · Test Cannon:") && e.Message.Contains("HIT"));
+        Assert.Contains(engine.LastEvents, e => e.Message.Contains("second (T2) → first (T1) · Test Cannon:") && e.Message.Contains("HIT"));
         Assert.DoesNotContain(engine.LastEvents, e => e.Message.Contains("resolving at the end"));
         Assert.True(first.IsDisabled);
         Assert.True(second.IsDisabled);
-        Assert.Single(engine.LastEvents, e => e.Message.Contains("first (Team 1) is disabled!"));
-        Assert.Single(engine.LastEvents, e => e.Message.Contains("second (Team 2) is disabled!"));
+        Assert.Single(engine.LastEvents, e => e.Message.Contains("first (T1) is disabled!"));
+        Assert.Single(engine.LastEvents, e => e.Message.Contains("second (T2) is disabled!"));
         Assert.Equal("Mutual destruction", state.Winner);
     }
 
@@ -189,8 +189,8 @@ public class CriticalDamageTests
         var engine = new CombatEngine(state, new ScriptedDice(15, 50));
         engine.ApplyGunneryTurn([new FireAction(0, "same-2")]);
         engine.ApplyGunneryTurn([new FireAction(0, "same-1")]);
-        Assert.Contains(engine.LastEvents, e => e.Message.Contains("Pegasus #1 (Team 1) fires Test Cannon at Pegasus #2 (Team 2)"));
-        Assert.Contains(engine.LastEvents, e => e.Message.Contains("Pegasus #2 (Team 2) fires Test Cannon at Pegasus #1 (Team 1)"));
+        Assert.Contains(engine.LastEvents, e => e.Message.Contains("Pegasus #1 (T1) → Pegasus #2 (T2) · Test Cannon"));
+        Assert.Contains(engine.LastEvents, e => e.Message.Contains("Pegasus #2 (T2) → Pegasus #1 (T1) · Test Cannon"));
     }
 
     private static ShipInstance MakeArmed(ShipInstance source, string id, int team, string? name = null)

@@ -100,7 +100,7 @@ public sealed class CombatEngine
             int roll = _dice.RollD20();
             int total = roll + bonus;
             bool hit = roll == 20 || (roll != 1 && total >= target.CurrentAC);
-            string description = $"{ShipLogName(defender)} fires {weapon.Name} at {ShipLogName(target)} as a free attack: Gunnery {CombatResolver.FormatCheck(roll, bonus, total)} vs AC {target.CurrentAC} — {(hit ? "HIT" : "MISS")}.";
+            string description = $"{ShipLogName(defender)} → {ShipLogName(target)} · {weapon.Name} (free attack): {CombatResolver.FormatCheck(roll, bonus, total)} vs AC {target.CurrentAC} — {(hit ? "HIT" : "MISS")}.";
             if (hit)
             {
                 bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
@@ -147,7 +147,7 @@ public sealed class CombatEngine
             if (GetFreeAttackWeapons().Count > 0) return;
             FreeAttackShipId = null;
         }
-        LastEvents.Add(new CombatEvent("Helm", ship.InstanceId, $"{ShipLogName(ship)} moves to {ship.Position}, facing {ship.Facing}."));
+        LastEvents.Add(new CombatEvent("Helm", ship.InstanceId, $"{ShipLogName(ship)} moves to {ship.Position} · {ship.Facing}."));
         _committedMove = null;
         AdvanceActor();
     }
@@ -578,12 +578,12 @@ public sealed class CombatEngine
         if (!check.IsHit)
         {
             LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId,
-                $"{ShipLogName(ship)} fires {weapon.Name} at {ShipLogName(target)}: {check.Description}"));
+                $"{ShipLogName(ship)} → {ShipLogName(target)} · {weapon.Name}: {check.Description}"));
             return check;
         }
 
         LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId,
-            $"{ShipLogName(ship)} fires {weapon.Name} at {ShipLogName(target)}: {check.Description}"));
+            $"{ShipLogName(ship)} → {ShipLogName(target)} · {weapon.Name}: {check.Description}"));
 
         if (weapon.Type == WeaponType.Tracking)
         {
@@ -729,7 +729,7 @@ public sealed class CombatEngine
             ship.CrewActionsUsed.Add(pilot);
             PendingStunt = stunt;
             LastEvents.Add(new CombatEvent("Helm", ship.InstanceId,
-                $"{ShipLogName(ship)} attempts Barrel Roll: {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(failedByFive ? "FAIL by 5 or more; AC and TL -4" : failed ? "FAIL; no roll" : "SUCCESS; port and starboard swap during Gunnery")}."));
+                $"{ShipLogName(ship)} · Barrel Roll: {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(failedByFive ? "FAIL by 5 or more; AC and TL -4" : failed ? "FAIL; no roll" : "SUCCESS; port and starboard swap during Gunnery")}."));
             return MoveValidationResult.Ok(ship.Position, ship.Facing);
         }
         if (stunt == "Evade")
@@ -740,7 +740,7 @@ public sealed class CombatEngine
             ship.CrewActionsUsed.Add(pilot);
             PendingStunt = stunt;
             LastEvents.Add(new CombatEvent("Helm", ship.InstanceId,
-                $"{ShipLogName(ship)} attempts Evade: {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(failed ? "FAIL" : "SUCCESS")}; AC and TL {modifier:+0;-0;0}."));
+                $"{ShipLogName(ship)} · Evade: {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(failed ? "FAIL" : "SUCCESS")}; AC and TL {modifier:+0;-0;0}."));
             return MoveValidationResult.Ok(ship.Position, ship.Facing);
         }
         if (stunt == "Slide")
@@ -756,7 +756,7 @@ public sealed class CombatEngine
             ship.CrewActionsUsed.Add(pilot);
             PendingStunt = stunt;
             LastEvents.Add(new CombatEvent("Helm", ship.InstanceId,
-                $"{ShipLogName(ship)} attempts Slide: {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(failed ? "FAIL" : "SUCCESS")}."));
+                $"{ShipLogName(ship)} · Slide: {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(failed ? "FAIL" : "SUCCESS")}."));
             return MoveValidationResult.Ok(ship.Position, ship.Facing);
         }
         int half = ship.Speed / 2;
@@ -775,7 +775,7 @@ public sealed class CombatEngine
         ship.CrewActionsUsed.Add(pilot);
         PendingStunt = stunt;
         LastEvents.Add(new CombatEvent("Helm", ship.InstanceId,
-            $"{ShipLogName(ship)} attempts {stunt}: {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(stunt == "Back Off" && failedByFive ? "FAIL by 5 or more; AC and TL -4" : failed ? "FAIL" : "SUCCESS")}."));
+            $"{ShipLogName(ship)} · {stunt}: {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(stunt == "Back Off" && failedByFive ? "FAIL by 5 or more; AC and TL -4" : failed ? "FAIL" : "SUCCESS")}."));
         return MoveValidationResult.Ok(ship.Position, ship.Facing);
     }
 
@@ -849,7 +849,7 @@ public sealed class CombatEngine
         int penalty = action.Action == "Hold It Together" ? 0 : ship.Systems.GetActionPenalty(ShipSystem.PowerCore);
         if (penalty == int.MinValue)
         {
-            LastEvents.Add(new CombatEvent("Engineering", ship.InstanceId, $"{ShipLogName(ship)} attempts {action.Action}: power core wrecked — automatic failure."));
+            LastEvents.Add(new CombatEvent("Engineering", ship.InstanceId, $"{ShipLogName(ship)} · {action.Action}: power core wrecked — automatic failure."));
             return null;
         }
         int bonus = ship.CrewBonus(action.CrewIndex, "engineering", "Engineer") + penalty;
@@ -876,7 +876,7 @@ public sealed class CombatEngine
             }
         }
         LastEvents.Add(new CombatEvent("Engineering", ship.InstanceId,
-            $"{ShipLogName(ship)} attempts {action.Action} ({action.Target}): {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(success ? "SUCCESS" : "FAIL")}.") );
+            $"{ShipLogName(ship)} · {action.Action} ({action.Target}): {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(success ? "SUCCESS" : "FAIL")}.") );
         return null;
     }
 
@@ -982,7 +982,7 @@ public sealed class CombatEngine
     {
         if (systemPenalty == int.MinValue)
         {
-            LastEvents.Add(new CombatEvent("Helm", ship.InstanceId, $"{ShipLogName(ship)} attempts {action.Action}: sensors wrecked — automatic failure."));
+            LastEvents.Add(new CombatEvent("Helm", ship.InstanceId, $"{ShipLogName(ship)} · {action.Action}: sensors wrecked — automatic failure."));
             return;
         }
         bonus += systemPenalty + ship.Systems.PowerCoreGlobalPenalty;
@@ -993,7 +993,7 @@ public sealed class CombatEngine
             ? $"{roll}{(bonus - rangePenalty < 0 ? "" : "+")}{bonus - rangePenalty}{rangePenalty}={total}"
             : CombatResolver.FormatCheck(roll, bonus, total);
         LastEvents.Add(new CombatEvent("Helm", ship.InstanceId,
-            $"{ShipLogName(ship)} attempts {action.Action}: Computers {check} vs DC {dc} — {(success ? "SUCCESS" : "FAIL")}, {describe(success)}"));
+            $"{ShipLogName(ship)} · {action.Action}: Computers {check} vs DC {dc} — {(success ? "SUCCESS" : "FAIL")}, {describe(success)}"));
     }
 
     /// <summary>
@@ -1141,7 +1141,7 @@ public sealed class CombatEngine
         ship.ManeuverSucceeded = roll + bonus >= dc;
         ship.CrewActionsUsed.Add(pilot);
         LastEvents.Add(new CombatEvent("Helm", ship.InstanceId,
-            $"{ShipLogName(ship)} attempts Maneuver: {CombatResolver.FormatCheck(roll, bonus, roll + bonus)} vs DC {dc} — {(ship.ManeuverSucceeded.Value ? "SUCCESS; distance between turns reduced by 1" : "FAIL; normal movement")}."));
+            $"{ShipLogName(ship)} · Maneuver: {CombatResolver.FormatCheck(roll, bonus, roll + bonus)} vs DC {dc} — {(ship.ManeuverSucceeded.Value ? "SUCCESS; distance between turns reduced by 1" : "FAIL; normal movement")}."));
         return null;
     }
 
@@ -1288,7 +1288,7 @@ public sealed class CombatEngine
                 ship.FlybySucceeded = roll + bonus >= dc;
                 ship.CrewActionsUsed.Add(pilot);
                 LastEvents.Add(new CombatEvent("Helm", ship.InstanceId,
-                    $"{ShipLogName(ship)} attempts Flyby against {ShipLogName(target)}: {CombatResolver.FormatCheck(roll, bonus, roll + bonus)} vs DC {dc} — {(ship.FlybySucceeded ? "SUCCESS" : "FAIL; normal free attack and targeting apply")}."));
+                    $"{ShipLogName(ship)} · Flyby against {ShipLogName(target)}: {CombatResolver.FormatCheck(roll, bonus, roll + bonus)} vs DC {dc} — {(ship.FlybySucceeded ? "SUCCESS" : "FAIL; normal free attack and targeting apply")}."));
             }
             PendingStunt = null;
             _stuntMoves = null;
@@ -1463,7 +1463,7 @@ public sealed class CombatEngine
     }
 
     private string ShipLogName(ShipInstance ship)
-        => $"{_state.DisplayName(ship)} (Team {ship.TeamId + 1})";
+        => $"{_state.DisplayName(ship)} (T{ship.TeamId + 1})";
 
     private void LogShipStatusChange(ShipInstance ship, bool wasDisabled, bool wasDestroyed, string phase)
     {
@@ -1680,7 +1680,7 @@ public sealed class CombatEngine
                 bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
                 var damage = CombatResolver.ApplyDamage(target, quadrant, rolledDamage, check.Roll, _dice, targetedSystem);
                 LastEvents.Add(new CombatEvent("Gunnery", attacker.InstanceId,
-                    $"{ShipLogName(target)} takes damage from {ShipLogName(attacker)}'s {weapon.Name}: {damage.Description}."));
+                    $"{ShipLogName(attacker)} → {ShipLogName(target)} · {weapon.Name}: {damage.Description}."));
                 LogShipStatusChange(target, wasDisabled, wasDestroyed, "Gunnery");
             }
         }

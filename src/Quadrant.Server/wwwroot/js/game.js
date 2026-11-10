@@ -23,6 +23,10 @@ let pendingMove = null;    // helm: { option, actorId } — move previewed, awai
 let refreshGunnery = null; // module-scope handle to the current gunnery refresh fn
 let renderedLogCount = 0;
 
+function formatArc(arc) {
+    return arc === 'AllArcs' ? 'Turret' : arc;
+}
+
 function assignGunneryTarget(weaponIndex, targetId) {
     const fired = new Set(state.firedWeaponIndices || []);
     const limit = currentActor()?.crewShotsRemaining ?? 0;
@@ -144,7 +148,7 @@ function renderCatalogList() {
                 <span class="cc-tier">Tier ${formatTier(s.tier)}</span>
             </div>
             <div class="cc-stats">SPD ${s.speed} · HP ${s.hullPoints} · AC ${s.ac} · ${s.maneuverability}</div>
-            <div class="cc-weapons">${s.weapons.map(w => `${w.name} (${w.arc})`).join(', ') || 'no weapons'}</div>
+            <div class="cc-weapons">${s.weapons.map(w => `${w.name} (${formatArc(w.arc)})`).join(', ') || 'no weapons'}</div>
             <div class="cc-add">
                 ${fleet.map((_, team) => `<button data-team="${team}" data-ship="${s.id}" style="color:${teamColor(team)}">+ Team ${team + 1}</button>`).join('')}
             </div>
@@ -468,7 +472,7 @@ function renderHelm() {
         actionPanel.innerHTML = `<div class="actor-name" style="color:${teamColor(defender.teamId)}">${defender.name} (Team ${defender.teamId + 1})</div>
             <div class="hint">${actor.name} is passing through this ship. Choose a gunner and direct-fire weapon for a free attack against its aft shields, or pass.</div>
             <label>Gunner <select id="free-gunner">${attack.gunners.map((g, i) => `<option value="${g.index}">Gunner ${i + 1} (${g.bonus >= 0 ? '+' : ''}${g.bonus})</option>`).join('')}</select></label>
-            <label>Weapon <select id="free-weapon">${attack.weapons.map(w => `<option value="${w.index}">${w.name} (${w.arc})</option>`).join('')}</select></label>
+            <label>Weapon <select id="free-weapon">${attack.weapons.map(w => `<option value="${w.index}">${w.name} (${formatArc(w.arc)})</option>`).join('')}</select></label>
             <button class="btn btn-primary" id="btn-free-fire">Fire Free Attack</button>
             <button class="btn btn-ghost" id="btn-free-pass">Pass</button>`;
         async function resolveFreeAttack(fire) {
@@ -1015,7 +1019,7 @@ function showShipDetails(ship) {
         .map(({ w, i }) => `
         <div class="detail-weapon dw-hoverable" data-weapon-index="${i}">
             <span class="dw-name">${w.displayName || w.name}${w.linkedCount > 1 ? ` (${w.linkedCount} mounts)` : ''}</span>
-            <span class="dw-meta">${w.arc}${w.broadArc ? ' + Broad Arc (−2 adjacent)' : ''} · range ${w.rangeIncrement ?? 5}/${w.maxRange ?? (w.rangeIncrement ?? 5) * 10} · ${w.damage}${w.type ? ` · ${w.type}` : ''}${w.limitedFireUses > 0 ? ` · ${w.usesRemaining}/${w.limitedFireUses} shots` : ''}</span>
+            <span class="dw-meta">${formatArc(w.arc)}${w.broadArc ? ' + Broad Arc (−2 adjacent)' : ''} · range ${w.rangeIncrement ?? 5}/${w.maxRange ?? (w.rangeIncrement ?? 5) * 10} · ${w.damage}${w.type ? ` · ${w.type}` : ''}${w.limitedFireUses > 0 ? ` · ${w.usesRemaining}/${w.limitedFireUses} shots` : ''}</span>
         </div>`).join('');
 
     const systemsHtml = (ship.damagedSystems || []).length

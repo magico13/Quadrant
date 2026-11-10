@@ -59,7 +59,7 @@ public class TrackingProjectileTests
 
         Assert.Single(state.Projectiles);
         Assert.Equal(0, dice.DamageRolls);
-        Assert.Contains(engine.LastEvents, e => e.Message.Contains("advances 2 hexes toward Target (Team 2). Gunnery: 15+3=18 vs TL 12."));
+        Assert.Contains(engine.LastEvents, e => e.Message.Contains("advances 2 hexes toward Target (T2). Gunnery: 15+3=18 vs TL 12."));
 
         state.Phase = CombatPhase.Gunnery;
         engine.AdvancePhase();
