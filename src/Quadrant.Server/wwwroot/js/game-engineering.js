@@ -14,13 +14,13 @@ function renderEngineering() {
             const used = new Set(ship.engineeringActionsUsed || []);
             const options = [];
             if (!used.has('Hold It Together')) for (const system of (ship.systems || []).filter(system => system.system !== 'WeaponsArray' && system.condition !== 'None'))
-                options.push(`<option value="Hold It Together|${system.system}">Hold It Together — ${system.system} (${system.condition})</option>`);
+                options.push(`<option value="${system.system}">${system.system} (${system.condition})</option>`);
             if (!used.has('Hold It Together')) for (const arc of (ship.weaponArcs || []).filter(arc => arc.condition !== 'None'))
-                options.push(`<option value="Hold It Together|WeaponsArray|${arc.installedArc}">Hold It Together — ${arc.arc} weapons (${arc.condition})</option>`);
+                options.push(`<option value="WeaponsArray|${arc.installedArc}">${arc.arc} weapons (${arc.condition})</option>`);
             return `<div class="detail-section" style="color:${teamColor(ship.teamId)}">${ship.name} (Team ${ship.teamId + 1})</div>
                 ${engineers.length ? `<div class="eng-row"><label>Engineer</label><select id="engineer-${ship.id}">${engineers.map(c => `<option value="${c.i}">${c.primaryRole} ${c.i + 1} (${c.roleBonus >= 0 ? '+' : ''}${c.roleBonus})</option>`).join('')}</select></div>
                 ${!used.has('Divert') ? `<button class="btn btn-ghost" data-divert-ship="${ship.id}">Divert Power</button>` : ''}
-                ${options.length ? `<div class="eng-row"><label>Hold action</label><select id="engineering-action-${ship.id}">${options.join('')}</select></div>
+                ${options.length ? `<div class="eng-row"><label>Hold It Together</label><select id="engineering-action-${ship.id}">${options.join('')}</select></div>
                     <button class="btn btn-ghost" data-engineering-ship="${ship.id}">Attempt Hold It Together</button>
                     <div class="hint" id="engineering-error-${ship.id}"></div>` : ''}
                 ${used.has('Divert') && !options.length ? '<div class="hint">No available engineer action.</div>' : ''}` : '<div class="hint">No available engineer action.</div>'}`;
@@ -45,9 +45,9 @@ function renderEngineering() {
         update();
         divertButton?.addEventListener('click', () => startDivert(ship.id, Number(engineerSelect.value)));
         holdButton?.addEventListener('click', async () => {
-            const [action, target, weaponArc] = select.value.split('|');
+            const [target, weaponArc] = select.value.split('|');
             try {
-                await api(`/${roomCode}/engineering`, { shipId: ship.id, crewIndex: Number(engineerSelect.value), action, target, weaponArc });
+                await api(`/${roomCode}/engineering`, { shipId: ship.id, crewIndex: Number(engineerSelect.value), action: 'Hold It Together', target, weaponArc });
                 await fetchState();
             } catch (err) { document.getElementById(`engineering-error-${ship.id}`).textContent = `Could not attempt action: ${err.message}`; }
         });
