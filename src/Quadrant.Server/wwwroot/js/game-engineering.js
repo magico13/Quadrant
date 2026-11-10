@@ -12,50 +12,124 @@ function renderEngineering() {
         ${ships.map(ship => {
             const engineers = (ship.crew || []).map((crew, i) => ({ ...crew, i })).filter(c => c.role === 'Engineer' && !c.actionUsed);
             const used = new Set(ship.engineeringActionsUsed || []);
-            const options = [];
+            const holdTargets = [];
             if (!used.has('Hold It Together')) for (const system of (ship.systems || []).filter(system => system.system !== 'WeaponsArray' && system.condition !== 'None'))
-                options.push(`<option value="${system.system}">${system.system} (${system.condition})</option>`);
+                holdTargets.push(system.system);
             if (!used.has('Hold It Together')) for (const arc of (ship.weaponArcs || []).filter(arc => arc.condition !== 'None'))
-                options.push(`<option value="WeaponsArray|${arc.installedArc}">${arc.arc} weapons (${arc.condition})</option>`);
+                holdTargets.push(`WeaponsArray|${arc.installedArc}`);
             return `<div class="detail-section" style="color:${teamColor(ship.teamId)}">${ship.name} (Team ${ship.teamId + 1})</div>
                 ${engineers.length ? `<div class="eng-row"><label>Engineer</label><select id="engineer-${ship.id}">${engineers.map(c => `<option value="${c.i}">${c.primaryRole} ${c.i + 1} (${c.roleBonus >= 0 ? '+' : ''}${c.roleBonus})</option>`).join('')}</select></div>
                 ${!used.has('Divert') ? `<button class="btn btn-ghost" data-divert-ship="${ship.id}">Divert Power</button>` : ''}
-                ${options.length ? `<div class="eng-row"><label>Hold It Together</label><select id="engineering-action-${ship.id}">${options.join('')}</select></div>
-                    <button class="btn btn-ghost" data-engineering-ship="${ship.id}">Attempt Hold It Together</button>
-                    <div class="hint" id="engineering-error-${ship.id}"></div>` : ''}
-                ${used.has('Divert') && !options.length ? '<div class="hint">No available engineer action.</div>' : ''}` : '<div class="hint">No available engineer action.</div>'}`;
+                ${holdTargets.length ? `<button class="btn btn-ghost" data-hold-ship="${ship.id}">Hold It Together</button>` : ''}
+                ${used.has('Divert') && !holdTargets.length ? '<div class="hint">No available engineer action.</div>' : ''}` : '<div class="hint">No available engineer action.</div>'}`;
         }).join('')}
         <button class="btn btn-primary" id="btn-end-eng">End Engineering</button>`;
     for (const ship of ships) {
-        const select = document.getElementById(`engineering-action-${ship.id}`);
-        const memoryKey = `quadrant:${roomCode}:engineering:${ship.id}`;
         const engineerSelect = document.getElementById(`engineer-${ship.id}`);
         if (!engineerSelect) continue;
-        const remembered = localStorage.getItem(memoryKey);
-        if (select && remembered && [...select.options].some(option => option.value === remembered)) select.value = remembered;
-        const holdButton = actionPanel.querySelector(`[data-engineering-ship="${ship.id}"]`);
+        const holdButton = actionPanel.querySelector(`[data-hold-ship="${ship.id}"]`);
         const divertButton = actionPanel.querySelector(`[data-divert-ship="${ship.id}"]`);
         const update = () => {
             const crew = ship.crew[Number(engineerSelect.value)];
-            if (holdButton) holdButton.textContent = `Attempt Hold It Together (${crew.engineeringChances.hold}% success)`;
+            if (holdButton) holdButton.textContent = `Hold It Together (${crew.engineeringChances.hold}% success)`;
             if (divertButton) divertButton.textContent = `Divert Power (${crew.engineeringChances.divert}% success)`;
         };
-        select?.addEventListener('change', () => localStorage.setItem(memoryKey, select.value));
         engineerSelect.addEventListener('change', update);
         update();
         divertButton?.addEventListener('click', () => startDivert(ship.id, Number(engineerSelect.value)));
-        holdButton?.addEventListener('click', async () => {
-            const [target, weaponArc] = select.value.split('|');
-            try {
-                await api(`/${roomCode}/engineering`, { shipId: ship.id, crewIndex: Number(engineerSelect.value), action: 'Hold It Together', target, weaponArc });
-                await fetchState();
-            } catch (err) { document.getElementById(`engineering-error-${ship.id}`).textContent = `Could not attempt action: ${err.message}`; }
-        });
+        holdButton?.addEventListener('click', () => startHold(ship.id, Number(engineerSelect.value)));
     }
     document.getElementById('btn-end-eng').addEventListener('click', async () => {
         await api(`/${roomCode}/end-engineering`);
         await fetchState();
     });
+}
+
+function holdShip() {
+    return pendingHold ? state?.ships.find(ship => ship.id === pendingHold.shipId) : null;
+}
+
+function canContinueHold() {
+    const pending = pendingHold;
+    const ship = holdShip();
+    const engineer = ship?.crew?.[pending?.crewIndex];
+    return !!pending && !!ship && !!engineer && state.phase === 'Engineering' && !state.isComplete &&
+        state.round === pending.round && !ship.isDestroyed && !ship.isDisabled && engineer.role === 'Engineer' &&
+        !engineer.actionUsed && !(ship.engineeringActionsUsed || []).includes('Hold It Together');
+}
+
+function clearHold() {
+    pendingHold = null;
+    if (holdDialog.open) holdDialog.close();
+}
+
+function startHold(shipId, crewIndex) {
+    const ship = state?.ships.find(candidate => candidate.id === shipId);
+    if (state?.phase !== 'Engineering' || !ship || ship.isDestroyed || ship.isDisabled ||
+        ship.crew[crewIndex]?.role !== 'Engineer' || ship.crew[crewIndex]?.actionUsed ||
+        (ship.engineeringActionsUsed || []).includes('Hold It Together')) return;
+    pendingHold = { shipId, crewIndex, round: state.round, target: null, weaponArc: null,
+        visibleArc: null, submitting: false, error: '' };
+    detailsShipId = null;
+    hideShipDetails();
+    renderHoldDialog();
+}
+
+function renderHoldDialog() {
+    if (!canContinueHold()) {
+        clearHold();
+        renderEngineering();
+        return;
+    }
+    const pending = pendingHold;
+    const ship = holdShip();
+    const engineer = ship.crew[pending.crewIndex];
+    const chance = engineer.engineeringChances?.hold ?? null;
+    holdDialog.innerHTML = `<div class="sd-header"><span class="sd-name" id="hold-title">Hold It Together · ${reportEscape(ship.name)}</span><button class="btn btn-ghost sd-close" id="btn-close-hold" aria-label="Close Hold It Together dialog" ${pending.submitting ? 'disabled' : ''}>×</button></div>
+        ${ShipSchematic.render(ship, { mode: 'hold', selectedSystem: pending.target, selectedArc: pending.visibleArc })}
+        <div class="system-picker-actions hold-dialog-actions"><button class="btn btn-primary" id="btn-confirm-hold" ${pending.submitting || !pending.target ? 'disabled' : ''}>${pending.submitting ? 'Attempting…' : `Confirm Hold It Together${chance != null ? ` (${chance}%)` : ''}`}</button><button class="btn btn-ghost" id="btn-cancel-hold" ${pending.submitting ? 'disabled' : ''}>Cancel</button></div>
+        <div class="hint" id="hold-error" role="status">${reportEscape(pending.error)}</div>`;
+    ShipSchematic.bind(holdDialog, ship, {
+        mode: 'hold', selectedSystem: pending.target, selectedArc: pending.visibleArc,
+        onSelect: (system, visibleArc, installedArc) => {
+            pending.target = system;
+            pending.visibleArc = visibleArc;
+            pending.weaponArc = system === 'WeaponsArray' ? installedArc : null;
+            pending.error = '';
+            renderHoldDialog();
+        }
+    });
+    document.getElementById('btn-confirm-hold').addEventListener('click', confirmHold);
+    document.getElementById('btn-close-hold').addEventListener('click', () => { clearHold(); renderEngineering(); });
+    document.getElementById('btn-cancel-hold').addEventListener('click', () => { clearHold(); renderEngineering(); });
+    holdDialog.oncancel = event => {
+        if (pendingHold?.submitting) { event.preventDefault(); return; }
+        clearHold();
+        renderEngineering();
+    };
+    if (!holdDialog.open) holdDialog.showModal();
+}
+
+async function confirmHold() {
+    if (!canContinueHold() || pendingHold.submitting || !pendingHold.target) return;
+    const pending = pendingHold;
+    pending.submitting = true;
+    pending.error = '';
+    renderHoldDialog();
+    try {
+        await api(`/${roomCode}/engineering`, {
+            shipId: pending.shipId, crewIndex: pending.crewIndex, action: 'Hold It Together',
+            target: pending.target, weaponArc: pending.weaponArc
+        });
+    } catch (err) {
+        pending.submitting = false;
+        pending.error = `Could not attempt Hold It Together: ${err.message}`;
+        renderHoldDialog();
+        return;
+    }
+    clearHold();
+    try { await fetchState(); }
+    catch (err) { renderEngineering(); addLog('error', `Hold It Together was submitted, but state could not refresh: ${err.message}`); }
 }
 
 const DIVERT_ARCS = ['forward', 'starboard', 'aft', 'port'];

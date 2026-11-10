@@ -13,6 +13,7 @@ const shipDetailsEl = document.getElementById('ship-details');
 const systemTargetDialog = document.getElementById('system-target-dialog');
 const balanceDialog = document.getElementById('balance-dialog');
 const divertDialog = document.getElementById('divert-dialog');
+const holdDialog = document.getElementById('hold-dialog');
 const damageReportEl = document.getElementById('damage-report');
 let damageReportOpen = false;
 let reportShipId = null;
@@ -30,6 +31,7 @@ let pendingMove = null;    // helm: { option, actorId } — move previewed, awai
 let pendingSystemTarget = null; // Local preview; popup confirmation spends an action.
 let pendingShieldBalance = null; // Local shield transfer preview until confirmed.
 let pendingDivert = null; // Local Divert selection until confirmed.
+let pendingHold = null; // Local Hold It Together target until confirmed.
 let refreshGunnery = null; // module-scope handle to the current gunnery refresh fn
 let renderedLogCount = 0;
 
@@ -97,6 +99,7 @@ async function launchGame(selections) {
     roomCode = res.roomCode;
     clearSystemTargeting();
     clearShieldBalancing();
+    clearHold();
     selectedShots.clear();
     selectedTargetArcs.clear();
     activeWeapon = null;
@@ -126,6 +129,7 @@ function render() {
     if (pendingSystemTarget && !canContinueSystemTargeting()) clearSystemTargeting();
     if (pendingShieldBalance && !canContinueShieldBalancing()) clearShieldBalancing();
     if (pendingDivert && !canContinueDivert()) clearDivert();
+    if (pendingHold && !canContinueHold()) clearHold();
 
     phaseEl.textContent = state.phase === 'CrewSetup' ? 'Crew Setup' : state.phase;
     roundEl.textContent = `Round ${state.round}`;
@@ -177,6 +181,7 @@ function render() {
         case 'Engineering':
             renderEngineering();
             if (pendingDivert) renderDivertDialog();
+            if (pendingHold) renderHoldDialog();
             break;
         case 'Helm': renderHelm(); break;
         case 'Gunnery': renderGunnery(); break;
@@ -231,6 +236,7 @@ document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && systemTargetDialog.open) return;
     if (event.key === 'Escape' && balanceDialog.open) return;
     if (event.key === 'Escape' && divertDialog.open) return;
+    if (event.key === 'Escape' && holdDialog.open) return;
     if (event.key === 'Escape' && pendingSystemTarget && !pendingSystemTarget.submitting) {
         event.preventDefault();
         clearSystemTargeting();
