@@ -22,7 +22,7 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 - Ship editing, per-player access and hidden information, and real-time synchronization remain future work. The architecture and v1 scope below describe targets, not all current implementation.
 
 ## TODO — Completed
-- [x] **Movement confirmation step (client).** Helm moves preview first: ghost ship + Confirm/Cancel panel. `game.js` (`pendingMove`, `setPendingMove()`, `confirmMove()`) + `hex.js` (`setGhost()`).
+- [x] **Movement confirmation step (client).** Helm moves preview first: ghost ship + Confirm/Cancel panel. `game-helm.js` handles movement state and confirmation; `hex.js` renders the ghost ship.
 - [x] **Turn In Place stunt.** Facing picker on own-ship click during Helm. Clumsy –4, poor –2 AC/TL until next round. `TryTurnInPlace(Facing)` in `CombatEngine.cs`.
 - [x] **Back Off and Flip and Burn stunts.** Piloting checks and stunt-specific movement are implemented. Flip and Burn permits movement up to half speed, including on failure; failure prevents rotation.
 - [x] **Evade and Slide stunts.** Evade uses normal movement and modifies AC/TL according to its check; Slide moves diagonally on success or forward at up to half speed on failure.
@@ -30,19 +30,22 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 - [x] **Flyby stunt.** Activate Flyby, then choose a legal route through exactly one occupied enemy hex. The confirmed route selects the enemy; roll against that enemy's tier when confirming movement. Success avoids one free attack from that enemy and permits one selected firing arc (including turrets) to fire against any chosen enemy quadrant at effective range 1 during the following Gunnery phase. Failure uses normal free attacks and targeting. Friendly-occupied hexes can be crossed freely, but movement cannot end on any occupied hex. Flyby routes cannot enter a second enemy-occupied hex or re-enter the enemy hex. Tracking shots originate adjacent to the selected quadrant to apply the close-range firing rule to projectile travel and point defense. Includes hover text, quadrant selection and persistence.
 - [x] **BFS turn rules fix.** Seed `sinceTurn = 0`; perfect ships can turn at any point; consecutive turn cap: perfect = 2, others = 1.
 - [x] **Stale highlights on phase change.** `renderGunnery()` clears Helm-phase highlights, path, and ghost.
-- [x] **Weapon-arc hex highlighting (client).** Per-increment range bands with opacity fading (3 bands: bright → medium → faint). Click a weapon chip to show its arc + range from current position/facing. `rangeBandHexes()` in `game.js`, per-band opacity in `hex.js`.
+- [x] **Weapon-arc hex highlighting (client).** Per-increment range bands with opacity fading (3 bands: bright → medium → faint). Click a weapon chip to show its arc + range from current position/facing. `game-gunnery.js` handles weapon selection and range bands; `hex.js` renders them.
 - [x] **Range-based attack penalty.** –2 per increment beyond the first, up to 10 increments max fire range. Canonical data from aonsrd.com (Short=5, Medium=10, Long=20). `Weapon.RangePenalty()`, applied in `CombatEngine.GetValidTargets()` and displayed as hit-chance badges + `[N hexes, –2]` in shot list.
 - [x] **Auto-targeting.** On Gunnery entry, each weapon auto-selects its closest valid enemy. Click any enemy to retarget (assigns best weapon). Weapon chips for per-weapon control.
 - [x] **Ship roster sidebar.** Team-colored ship list with hull readout, active-actor indicator, click-to-show-details + smooth center-on-click. Works in all phases.
-- [x] **JSON catalog and fleet selection (uncommitted).** Load ships and weapons from files and choose each team's fleet before starting a hotseat game.
-- [x] **Multiple teams and random placement (uncommitted).** Setup offers two to five teams; the server accepts any number of valid teams. Each ship acts independently and combat continues until at most one team remains. Team leaders are spread around the first team: each is placed a rolled 3d6+5 hexes from its leader, favoring comparable separation from the other leaders. Allies start within three hexes of an ally, with one random facing per team and no overlapping ships. Placement for three or more teams is a game-specific extension of the two-side rule.
+- [x] **JSON catalog and fleet selection.** Load ships and weapons from files and choose each team's fleet before starting a hotseat game.
+- [x] **Multiple teams and random placement.** Setup offers two to five teams; the server accepts any number of valid teams. Each ship acts independently and combat continues until at most one team remains. Team leaders are spread around the first team: each is placed a rolled 3d6+5 hexes from its leader, favoring comparable separation from the other leaders. Allies start within three hexes of an ally, with one random facing per team and no overlapping ships. Placement for three or more teams is a game-specific extension of the two-side rule.
+- [x] **Ship schematic and damage report.** View shield strength and component conditions on the schematic; show the ship's damage report from the same view.
+- [x] **Map-based engineering actions.** Divert Power and Hold It Together use the ship schematic to select a component or shield arc, preview the effect, and confirm or cancel the action. Target System confirms and rolls from its map popup; Balance Shields provides shield allocation controls.
+- [x] **Client script split.** Move setup, ship UI, engineering, Helm and Gunnery code into focused files, leaving `game.js` as the shared client entry point and orchestration layer.
 
 ## TODO — Next Up (Bigger Features)
 
 ### Hotseat rules completion (before multiplayer)
 - [ ] Audit existing movement, attacks, critical damage and phase timing against the local `wiki_pages/Chapter 9_ Starships - Rules - Archives of Nethys_ Starfinder RPG Database.html` and document deliberate deviations.
 - [ ] Complete crew, role-change, action-limit, skill, ship Resolve and minor-action rules; add crew casualties.
-- [ ] Implement the remaining crew actions, stunts, system damage effects and engineering repairs described below. Scan follows multiplayer.
+- [ ] Complete the remaining crew actions, action limits, skill and Resolve rules, and repairs described below. Core stunts, Divert, Hold It Together, Balance Shields and Target System are already implemented; Scan follows multiplayer.
 - [ ] **Computer ICM bonuses.** Track each computer node's bonus and uses per round; prompt before an eligible starship combat check to apply one available node. Multiple nodes can affect separate checks, but bonuses cannot stack on one check.
 - [x] **Linked weapon batteries.** Group identical direct-fire mounts in the same arc; resolve each linked group as one gunnery action and check, with combined damage.
 - [ ] Implement remaining weapon property rules in the priority order below.
