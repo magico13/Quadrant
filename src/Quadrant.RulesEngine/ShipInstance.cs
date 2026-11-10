@@ -54,6 +54,9 @@ public sealed class ShipInstance
     public List<SystemDamageInfo> DamagedSystems =>
         Systems.DamagedSystems().Select(d => new SystemDamageInfo(d.System, d.Condition)).ToList();
 
+    /// <summary>Received outcomes since Gunnery last began; also retained for disabled/destroyed ships.</summary>
+    public List<ReceivedDamageEvent> DamageReport { get; } = [];
+
     // --- Per-round transient state (reset each round) ---
 
     /// <summary>AC/TL modifier from stunts or actions this round (e.g. Evade +2).</summary>
@@ -92,6 +95,34 @@ public sealed class ShipInstance
             _ => w
         }).ToList()
         : Definition.Weapons;
+
+    public static readonly FiringArc[] StandardWeaponArcs = [FiringArc.Forward, FiringArc.Starboard, FiringArc.Aft, FiringArc.Port];
+
+    /// <summary>Stored arcs follow the installed mounts, including during a Barrel Roll.</summary>
+    public FiringArc InstalledWeaponArc(FiringArc visibleArc) => BarrelRollActive ? visibleArc switch
+    {
+        FiringArc.Port => FiringArc.Starboard,
+        FiringArc.Starboard => FiringArc.Port,
+        _ => visibleArc
+    } : visibleArc;
+
+    public IEnumerable<FiringArc> OccupiedWeaponArcs => StandardWeaponArcs.Where(arc =>
+        Definition.Weapons.Any(w => w.Arc == arc || w.Arc == FiringArc.AllArcs));
+
+    public FiringArc WeaponConditionArc(Weapon weapon, Hex target, FiringArc? firingArc = null)
+    {
+        var visibleArc = weapon.Arc != FiringArc.AllArcs ? weapon.Arc : firingArc ?? PhysicalQuadrantOf(target) switch
+        {
+            Quadrant.Forward => FiringArc.Forward,
+            Quadrant.Starboard => FiringArc.Starboard,
+            Quadrant.Aft => FiringArc.Aft,
+            _ => FiringArc.Port
+        };
+        return InstalledWeaponArc(visibleArc);
+    }
+
+    public int WeaponActionPenalty(Weapon weapon, Hex target, FiringArc? firingArc = null)
+        => Systems.GetWeaponActionPenalty(WeaponConditionArc(weapon, target, firingArc));
 
     /// <summary>Current roles in the same order as the ship's crew definitions.</summary>
     public List<string> CrewRoles { get; } = [];
@@ -294,6 +325,7 @@ public sealed class ShipInstance
         DivertEngines = DivertWeapons = DivertScience = false;
         EngineeringActionsUsed.Clear();
         Systems.HeldSystem = null;
+        Systems.HeldWeaponArc = null;
         RoundAcTlModifier = 0;
         TurnedInPlaceThisRound = false;
         BarrelRolledThisRound = BarrelRollActive = false;

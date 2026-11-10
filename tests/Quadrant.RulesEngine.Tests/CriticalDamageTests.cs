@@ -32,12 +32,12 @@ public class CriticalDamageTests
     [Fact]
     public void NaturalTwentyAndTwoThresholdCrossingsCauseThreeCriticalEffects()
     {
-        var target = MakeShip(Facing.West, new Hex(1, 0), criticalThreshold: 7);
+        var target = MakeShip(Facing.West, new Hex(1, 0), criticalThreshold: 7, weapons: [MakeWeapon()]);
         target.Shields.Forward = 0;
         target.TotalHullDamageTaken = 1;
         var result = CombatResolver.ApplyDamage(target, Q.Forward, 16, 20, new ScriptedDice(20, 50));
         Assert.Equal(3, result.CriticalEffects.Count);
-        Assert.Equal(SystemCondition.Wrecked, target.Systems.Get(ShipSystem.WeaponsArray));
+        Assert.Equal(SystemCondition.Wrecked, target.Systems.GetWeaponArc(FiringArc.Forward));
     }
     [Theory]
     [InlineData(7, false)]

@@ -48,7 +48,7 @@ public class HitChanceTests
     public void ComputeGunnerBonus_SumsBaseAttackAndDexterity()
     {
         var ship = MakeShip(gunnerBaseAttack: 5, dexterityModifier: 2);
-        Assert.Equal(7, CombatResolver.ComputeGunnerBonus(ship));
+        Assert.Equal(7, CombatResolver.ComputeGunnerBonus(ship, TestWeapon, new Hex(1, 0)));
     }
 
     [Fact]
@@ -57,11 +57,12 @@ public class HitChanceTests
         var ship = MakeShip(gunnerBaseAttack: 5, dexterityModifier: 2);
         // Escalate the weapons array to Wrecked (None → Glitching → Malfunctioning → Wrecked).
         for (int i = 0; i < 3; i++)
-            ship.Systems.ApplyCritical(ShipSystem.WeaponsArray);
-        Assert.Equal(int.MinValue, CombatResolver.ComputeGunnerBonus(ship));
+            ship.Systems.ApplyWeaponCritical(FiringArc.Forward);
+        Assert.Equal(int.MinValue, CombatResolver.ComputeGunnerBonus(ship, TestWeapon, new Hex(1, 0)));
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
+    private static Weapon TestWeapon => new() { Name = "Cannon", Arc = FiringArc.Forward, Damage = DamageExpression.From("1") };
 
     private static ShipInstance MakeShip(int gunnerBaseAttack, int dexterityModifier)
     {

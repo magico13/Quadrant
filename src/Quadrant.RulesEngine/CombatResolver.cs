@@ -13,6 +13,8 @@ public sealed record AttackResult(
     SystemCondition? NewCriticalCondition,
     string Description)
 {
+    public IReadOnlyList<CriticalDamageEffect> CriticalEffects { get; init; } = [];
+
     public static AttackResult Miss(int checkTotal, int targetValue, string description)
         => new(false, 0, 0, 0, false, null, null, description);
 
@@ -24,7 +26,7 @@ public sealed record AttackCheckResult(
     bool IsHit, int Roll, int Modifier, int CheckTotal, int DefenseValue,
     string DefenseName, int DamageRolled, string Description);
 
-public sealed record CriticalDamageEffect(ShipSystem? System, SystemCondition? Condition);
+public sealed record CriticalDamageEffect(ShipSystem? System, SystemCondition? Condition, FiringArc? WeaponArc = null);
 public sealed record DamageResolution(int ShieldDamage, int HullDamage, bool CriticalScored,
     ShipSystem? CriticalSystem, SystemCondition? NewCriticalCondition, string Description)
 {
@@ -46,11 +48,11 @@ public static class CombatResolver
         int total = roll + checkBonus;
         string desc = $"Tracking check {FormatCheck(roll, checkBonus, total)} vs TL {defenseValue} — IMPACT! {damage.Description}.";
         return AttackResult.Success(total, rawDamage, damage.ShieldDamage, damage.HullDamage,
-            damage.CriticalScored, damage.CriticalSystem, damage.NewCriticalCondition, desc);
+            damage.CriticalScored, damage.CriticalSystem, damage.NewCriticalCondition, desc) with { CriticalEffects = damage.CriticalEffects };
     }
 
     public static AttackCheckResult RollAttack(ShipInstance attacker, ShipInstance target, Weapon weapon, IDiceRoller dice,
-        int? gunnerBonus = null, int? defense = null, bool rollDamage = true, bool flyby = false)
+        int? gunnerBonus = null, int? defense = null, bool rollDamage = true, bool flyby = false, FiringArc? firingArc = null)
     {
         int range = flyby ? 1 : attacker.Position.DistanceTo(target.Position);
         double angle = flyby ? weapon.Arc switch
@@ -65,7 +67,7 @@ public static class CombatResolver
         if (!weapon.CanTarget(range, angle))
             return new(false, 0, 0, 0, defenseValue, defenseName, 0, "Cannot target: out of range or wrong arc.");
 
-        int bonus = gunnerBonus ?? ComputeGunnerBonus(attacker);
+        int bonus = gunnerBonus ?? ComputeGunnerBonus(attacker, weapon, target.Position, firingArc);
         if (bonus == int.MinValue)
             return new(false, 0, 0, 0, defenseValue, defenseName, 0, "Weapons array is wrecked — attack auto-fails.");
         bonus += weapon.RangePenalty(range) + weapon.ArcPenalty(angle);
@@ -114,7 +116,13 @@ public static class CombatResolver
             var system = i == 0 && targetedSystem is not null
                 ? NextAvailableSystem(targetedSystem.Value, target)
                 : SystemFromPercent(dice.RollPercent(), target);
-            effects.Add(system is { } available
+            if (system == ShipSystem.WeaponsArray)
+            {
+                var arcs = target.OccupiedWeaponArcs.Where(a => target.Systems.GetWeaponArc(a) != SystemCondition.Wrecked).ToArray();
+                var arc = arcs[dice.Roll(arcs.Length) - 1];
+                effects.Add(new CriticalDamageEffect(system, target.Systems.ApplyWeaponCritical(arc), arc));
+            }
+            else effects.Add(system is { } available
                 ? new CriticalDamageEffect(available, target.Systems.ApplyCritical(available))
                 : new CriticalDamageEffect(null, null));
         }
@@ -123,7 +131,7 @@ public static class CombatResolver
         foreach (var effect in effects)
             description += effect.System is null
                 ? $". CRITICAL: crew injury requires manual resolution ({hullDamage} damage, DC 20 Reflex for half)!"
-                : $". CRITICAL: {effect.System} → {effect.Condition}!";
+                : $". CRITICAL: {effect.System}{(effect.WeaponArc is { } arc ? $" ({arc})" : "")} → {effect.Condition}!";
         return new DamageResolution(shieldDamage, hullDamage, effects.Count > 0, effects.FirstOrDefault()?.System,
             effects.FirstOrDefault()?.Condition, description) { CriticalEffects = effects };
     }
@@ -144,24 +152,25 @@ public static class CombatResolver
         var damage = ApplyDamage(target, target.QuadrantOf(attacker.Position), check.DamageRolled, check.Roll, dice);
         return AttackResult.Success(check.CheckTotal, check.DamageRolled, damage.ShieldDamage, damage.HullDamage,
             damage.CriticalScored, damage.CriticalSystem, damage.NewCriticalCondition,
-            $"{check.Description} Effects: {damage.Description}.");
+            $"{check.Description} Effects: {damage.Description}.") with { CriticalEffects = damage.CriticalEffects };
     }
 
     /// <summary>
     /// Computes the attacker's gunnery bonus (base attack + Dexterity + system
-    /// condition penalties). Returns <see cref="int.MinValue"/> when the weapons
-    /// array is wrecked and the attack auto-fails.
+    /// condition penalties). Returns <see cref="int.MinValue"/> when the selected
+    /// weapon array is wrecked and the attack auto-fails.
     /// </summary>
-    public static int ComputeGunnerBonus(ShipInstance attacker)
+    public static int ComputeGunnerBonus(ShipInstance attacker, Weapon weapon, Hex target, FiringArc? firingArc = null)
     {
-        // A wrecked weapons array auto-fails all gunnery actions. Check the sentinel
-        // before adding it to the base bonus, or integer overflow would mask it.
-        if (attacker.Systems.GetActionPenalty(ShipSystem.WeaponsArray) == int.MinValue)
+        // Check the selected array before adding its sentinel to the base bonus,
+        // or integer overflow would mask it.
+        int penalty = attacker.WeaponActionPenalty(weapon, target, firingArc);
+        if (penalty == int.MinValue)
             return int.MinValue;
 
         int bonus = attacker.Definition.GunnerBaseAttack
                   + attacker.Definition.DexterityModifier
-                  + attacker.Systems.GetActionPenalty(ShipSystem.WeaponsArray);
+                  + penalty;
 
         // Power core global penalty.
         bonus += attacker.Systems.PowerCoreGlobalPenalty;
@@ -196,7 +205,9 @@ public static class CombatResolver
     {
         ShipSystem[] order = [ShipSystem.LifeSupport, ShipSystem.Sensors, ShipSystem.WeaponsArray, ShipSystem.Engines, ShipSystem.PowerCore];
         for (int i = Array.IndexOf(order, startingSystem); i < order.Length; i++)
-            if (target.Systems.Get(order[i]) != SystemCondition.Wrecked) return order[i];
+            if (order[i] == ShipSystem.WeaponsArray
+                ? target.OccupiedWeaponArcs.Any(a => target.Systems.GetWeaponArc(a) != SystemCondition.Wrecked)
+                : target.Systems.Get(order[i]) != SystemCondition.Wrecked) return order[i];
         return null;
     }
 }

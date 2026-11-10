@@ -47,6 +47,9 @@ public sealed class GameState
     /// <summary>Current round number (1-based). Increments after Gunnery completes.</summary>
     public int Round { get; set; } = 0;
 
+    /// <summary>Round when the current damage-report period began.</summary>
+    public int? DamageReportRound { get; set; }
+
     /// <summary>All ships in the battle, keyed by instance ID.</summary>
     public List<ShipInstance> Ships { get; } = [];
 

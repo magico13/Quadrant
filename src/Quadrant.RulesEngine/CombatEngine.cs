@@ -18,7 +18,7 @@ public sealed record PointDefensePrompt(string TargetShipId, FiringArc Arc, IRea
 public sealed record FiredWeaponSnapshot(string ShipId, int WeaponIndex);
 public sealed record TargetArcSnapshot(string ShipId, string TargetId, FiringArc Arc);
 public sealed record ShieldAllocation(int Forward, int Starboard, int Aft, int Port);
-public sealed record EngineerAction(string ShipId, int CrewIndex, string Action, string Target, ShieldAllocation? Shields);
+public sealed record EngineerAction(string ShipId, int CrewIndex, string Action, string Target, ShieldAllocation? Shields, FiringArc? WeaponArc = null);
 public sealed record ScienceAction(string ShipId, int CrewIndex, string Action, string TargetShipId = "", string System = "", string FromQuadrant = "", string ToQuadrant = "", int Amount = 0, bool BalanceEvenly = false);
 public sealed record TargetedSystemSnapshot(string ShipId, string TargetShipId, ShipSystem System);
 public sealed record CombatEngineSnapshot(
@@ -73,13 +73,14 @@ public sealed class CombatEngine
     public IReadOnlyList<int> GetFreeAttackWeapons()
     {
         var defender = FreeAttackShipId is null ? null : _state.GetShip(FreeAttackShipId);
-        if (defender is null || defender.IsDestroyed || defender.IsDisabled || CombatResolver.ComputeGunnerBonus(defender) == int.MinValue) return [];
+        if (defender is null || defender.IsDestroyed || defender.IsDisabled) return [];
         defender.InitializeCrewRoles();
         if (!defender.CrewRoles.Contains("Gunner")) return [];
         return defender.Weapons.Select((weapon, index) => (weapon, index))
             .Where(x => x.weapon.Type == WeaponType.DirectFire && defender.HasWeaponUses(x.index) &&
                 LinkedMountIndices(defender, x.index).All(i => defender.HasWeaponUses(i)))
             .Where(x => !EarlierLinkedMount(defender, x.index))
+            .Where(x => defender.WeaponActionPenalty(x.weapon, _state.CurrentActor!.Position) != int.MinValue)
             .Select(x => x.index).ToList();
     }
 
@@ -96,7 +97,7 @@ public sealed class CombatEngine
             var mountIndices = LinkedMountIndices(defender, wi);
             var weapon = CombineLinkedWeapon(defender, wi, mountIndices);
             foreach (var index in mountIndices) defender.ConsumeWeaponUse(index);
-            int bonus = defender.CrewBonus(gunner, "gunnery", "Gunner") + defender.Systems.GetActionPenalty(ShipSystem.WeaponsArray) + defender.Systems.PowerCoreGlobalPenalty;
+            int bonus = defender.CrewBonus(gunner, "gunnery", "Gunner") + defender.WeaponActionPenalty(weapon, target.Position) + defender.Systems.PowerCoreGlobalPenalty;
             int roll = _dice.RollD20();
             int total = roll + bonus;
             bool hit = roll == 20 || (roll != 1 && total >= target.CurrentAC);
@@ -104,7 +105,11 @@ public sealed class CombatEngine
             if (hit)
             {
                 bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
-                var damage = CombatResolver.ApplyDamage(target, Quadrant.Aft, weapon.Damage.Roll(_dice), roll, _dice);
+                var before = DamageState.Capture(target);
+                int rawDamage = weapon.Damage.Roll(_dice, defender.DivertWeapons);
+                var damage = CombatResolver.ApplyDamage(target, Quadrant.Aft, rawDamage, roll, _dice);
+                RecordDamage(defender.InstanceId, weapon.Name, target, Quadrant.Aft, rawDamage, damage.ShieldDamage,
+                    damage.HullDamage, before, damage.CriticalEffects);
                 description += $" {damage.Description}.";
                 LastEvents.Add(new CombatEvent("Helm", defender.InstanceId, description));
                 LogShipStatusChange(target, wasDisabled, wasDestroyed, "Helm");
@@ -253,7 +258,12 @@ public sealed class CombatEngine
 
             case CombatPhase.Helm:
                 _state.Phase = CombatPhase.Gunnery;
-                foreach (var ship in _state.Ships) ship.BarrelRollActive = ship.BarrelRolledThisRound;
+                _state.DamageReportRound = _state.Round;
+                foreach (var ship in _state.Ships)
+                {
+                    ship.DamageReport.Clear();
+                    ship.BarrelRollActive = ship.BarrelRolledThisRound;
+                }
                 _state.CurrentActorIndex = 0;
                 LastEvents.Add(new CombatEvent("Gunnery", "", "Gunnery phase."));
                 break;
@@ -531,9 +541,9 @@ public sealed class CombatEngine
         if (!flyby && sharedBoundary)
         {
             var availableArcs = ship.Weapons.Select((w, i) => (Weapon: w, Index: i))
-                .Where(x => !_firedWeapons.Contains((ship.InstanceId, x.Index)) && ship.HasWeaponUses(x.Index) && x.Weapon.Arc != FiringArc.AllArcs && x.Weapon.CanTarget(targetRange, targetAngle))
-                .Select(x => x.Weapon)
-                .Select(w => w.Arc).Distinct().ToList();
+                .Where(x => !_firedWeapons.Contains((ship.InstanceId, x.Index)) && ship.HasWeaponUses(x.Index) && x.Weapon.CanTarget(targetRange, targetAngle))
+                .SelectMany(x => FiringArcsFor(x.Weapon, targetAngle))
+                .Where(a => ship.Systems.GetWeaponActionPenalty(ship.InstalledWeaponArc(a)) != int.MinValue).Distinct().ToList();
             bool alreadyChosen = _targetArcChoices.TryGetValue(arcKey, out var existingArc);
             FiringArc? selectedArc = alreadyChosen ? existingArc : chosenArc;
             if (selectedArc is null && availableArcs.Count == 1) selectedArc = availableArcs[0];
@@ -565,16 +575,17 @@ public sealed class CombatEngine
         }
         if (flyby) ship.FlybyFiringArc = flybyArc;
 
+        var firingArc = flybyArc ?? (_targetArcChoices.TryGetValue(arcKey, out var committedFiringArc) ? committedFiringArc : (FiringArc?)null);
         int? crewBonus = actingCrew >= 0 ? ship.CrewBonus(actingCrew, "gunnery", "Gunner") : null;
         if (crewBonus.HasValue)
         {
-            int penalty = ship.Systems.GetActionPenalty(ShipSystem.WeaponsArray);
+            int penalty = ship.WeaponActionPenalty(weapon, target.Position, firingArc);
             crewBonus = penalty == int.MinValue ? int.MinValue : crewBonus.Value + penalty + ship.Systems.PowerCoreGlobalPenalty - (snapShot ? 2 : 0);
             if (snapShot) ship.CrewMinorActionsUsed.Add(actingCrew);
             else ship.CrewActionsUsed.Add(actingCrew);
             ship.GunnerActionTaken = true;
         }
-        var check = CombatResolver.RollAttack(ship, target, attackWeapon, _dice, gunnerBonus: crewBonus, rollDamage: false, flyby: flyby);
+        var check = CombatResolver.RollAttack(ship, target, attackWeapon, _dice, gunnerBonus: crewBonus, rollDamage: false, flyby: flyby, firingArc: firingArc);
         if (!check.IsHit)
         {
             LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId,
@@ -602,7 +613,7 @@ public sealed class CombatEngine
                 OwnerShipId = ship.InstanceId, TargetShipId = target.InstanceId,
                 Position = flyby ? target.Position.Step(flybyDirection, 1) : ship.Position,
                 Facing = flyby ? (Facing)((flybyDirection + 3) % Hex.DirectionCount) : TrackingLaunchFacing(ship, target, weapon),
-                Speed = weapon.ProjectileSpeed, GunnerBonus = (crewBonus ?? CombatResolver.ComputeGunnerBonus(ship)) + (snapShot ? 2 : 0), Weapon = weapon,
+                Speed = weapon.ProjectileSpeed, GunnerBonus = (crewBonus ?? CombatResolver.ComputeGunnerBonus(ship, weapon, target.Position, firingArc)) + (snapShot ? 2 : 0), Weapon = weapon,
                 FlybyQuadrant = flyby ? action.TargetQuadrant : null
             };
             _pendingLaunches.Add((projectile, check, ++_nextAttackOrder));
@@ -831,6 +842,9 @@ public sealed class CombatEngine
         ShipSystem heldSystem = default;
         if (action.Action == "Hold It Together" && (!Enum.TryParse(action.Target, true, out heldSystem) || !Enum.IsDefined(heldSystem)))
             return "Select a valid system to hold together.";
+        if (action.Action == "Hold It Together" && heldSystem == ShipSystem.WeaponsArray &&
+            (action.WeaponArc is not { } arc || !ship.OccupiedWeaponArcs.Contains(arc)))
+            return "Select a weapon arc to hold together.";
         if (action.Action == "Divert" && action.Target is not ("Engines" or "Science" or "Weapons" or "Shields"))
             return "Select a valid system for Divert.";
         if (action.Action == "Divert" && action.Target == "Shields")
@@ -857,7 +871,11 @@ public sealed class CombatEngine
         int total = roll + bonus;
         int dc = (int)Math.Floor((action.Action == "Divert" ? 10 : 15) + 1.5 * ship.Definition.Tier);
         bool success = total >= dc;
-        if (success && action.Action == "Hold It Together") ship.Systems.HeldSystem = heldSystem;
+        if (success && action.Action == "Hold It Together")
+        {
+            ship.Systems.HeldSystem = heldSystem;
+            ship.Systems.HeldWeaponArc = heldSystem == ShipSystem.WeaponsArray ? action.WeaponArc : null;
+        }
         if (success && action.Action == "Divert")
         {
             switch (action.Target)
@@ -876,7 +894,7 @@ public sealed class CombatEngine
             }
         }
         LastEvents.Add(new CombatEvent("Engineering", ship.InstanceId,
-            $"{ShipLogName(ship)} · {action.Action} ({action.Target}): {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(success ? "SUCCESS" : "FAIL")}.") );
+            $"{ShipLogName(ship)} · {action.Action} ({action.Target}{(action.WeaponArc is { } heldArc ? $" · {heldArc}" : "")}): {CombatResolver.FormatCheck(roll, bonus, total)} vs DC {dc} — {(success ? "SUCCESS" : "FAIL")}.") );
         return null;
     }
 
@@ -922,6 +940,9 @@ public sealed class CombatEngine
             }, rangePenalty);
             return null;
         }
+
+        if (checkSystem == SystemCondition.Wrecked)
+            return "Balance Shields requires functioning sensors.";
 
         var shields = ship.Shields;
         int totalShields = shields.Forward + shields.Starboard + shields.Aft + shields.Port;
@@ -975,7 +996,8 @@ public sealed class CombatEngine
         bool hasListedSkill = ship.Definition.Crew[crewIndex].Skills.ContainsKey("computers") ||
             ship.Definition.Crew.Any(c => c.Role == "Science Officer" && c.Skills.ContainsKey("computers"));
         int bonus = ship.CrewBonus(crewIndex, "computers", "Science Officer");
-        return hasListedSkill ? bonus : bonus + ship.Definition.ComputersModifier;
+        return (hasListedSkill ? bonus : bonus + ship.Definition.ComputersModifier) +
+            (ship.DivertScience ? 2 : 0);
     }
 
     private void ResolveScienceCheck(ShipInstance ship, ScienceAction action, int bonus, int systemPenalty, int dc, Func<bool, string> describe, int rangePenalty = 0)
@@ -1319,7 +1341,10 @@ public sealed class CombatEngine
     }
 
     /// <summary>A weapon that the current actor can fire at a specific target.</summary>
-    public sealed record TargetOption(string WeaponName, string TargetShipId, int Range, int HitChancePercent, int WeaponIndex, int RangePenalty, int ArcPenalty, FiringArc Arc, bool BroadArc, bool ArcChoiceRequired, List<FiringArc> ArcChoices, bool Flyby = false);
+    public sealed record TargetOption(string WeaponName, string TargetShipId, int Range, int HitChancePercent, int WeaponIndex, int RangePenalty, int ArcPenalty, FiringArc Arc, bool BroadArc, bool ArcChoiceRequired, List<FiringArc> ArcChoices, bool Flyby = false)
+    {
+        public Dictionary<FiringArc, int>? ArcHitChances { get; init; }
+    }
 
     private static bool IsFlybyTarget(ShipInstance ship, ShipInstance target)
         => ship.FlybySucceeded && ship.FlybyCrossed && ship.FlybyTargetId == target.InstanceId;
@@ -1335,16 +1360,14 @@ public sealed class CombatEngine
         var ship = _state.CurrentActor;
         if (ship is null || _state.Phase != CombatPhase.Gunnery) return [];
 
-        int bonus = CombatResolver.ComputeGunnerBonus(ship);
-        if (bonus == int.MinValue) return [];
+        int bonus = ship.Definition.GunnerBaseAttack + ship.Definition.DexterityModifier + ship.Systems.PowerCoreGlobalPenalty;
         if (ship.Definition.Crew.Count > 0)
         {
             int gunner = ship.AvailableGunner();
             bool snap = gunner < 0;
             int crew = snap ? ship.AvailableMinorCrew() : gunner;
             if (crew < 0 || (snap && ship.GunnerActionTaken)) return [];
-            bonus = ship.CrewBonus(crew, "gunnery", "Gunner") + ship.Systems.GetActionPenalty(ShipSystem.WeaponsArray)
-                + ship.Systems.PowerCoreGlobalPenalty - (snap ? 2 : 0);
+            bonus = ship.CrewBonus(crew, "gunnery", "Gunner") + ship.Systems.PowerCoreGlobalPenalty - (snap ? 2 : 0);
         }
         var options = new List<TargetOption>();
         var arcChoices = new Dictionary<string, List<FiringArc>>();
@@ -1354,8 +1377,9 @@ public sealed class CombatEngine
             if (IsSharedArcBoundary(angle))
                 arcChoices[target.InstanceId] = ship.Weapons.Select((weapon, index) => (Weapon: weapon, Index: index))
                     .Where(x => !_firedWeapons.Contains((ship.InstanceId, x.Index)) && ship.HasWeaponUses(x.Index) &&
-                                x.Weapon.Arc != FiringArc.AllArcs && x.Weapon.CanTarget(ship.Position.DistanceTo(target.Position), angle))
-                    .Select(x => x.Weapon.Arc).Distinct().ToList();
+                                x.Weapon.CanTarget(ship.Position.DistanceTo(target.Position), angle))
+                    .SelectMany(x => FiringArcsFor(x.Weapon, angle))
+                    .Where(a => ship.Systems.GetWeaponActionPenalty(ship.InstalledWeaponArc(a)) != int.MinValue).Distinct().ToList();
         }
         for (int wi = 0; wi < ship.Weapons.Count; wi++)
         {
@@ -1374,9 +1398,13 @@ public sealed class CombatEngine
                     if (!FlybyArcAllowed(ship, weapon) || !weapon.CanFireAtCloseRange || weapon.MaxFireRange < 1) continue;
                     bool chooseArc = weapon.Arc == FiringArc.AllArcs && ship.FlybyFiringArc is null;
                     int defense = weapon.Type == WeaponType.Tracking ? target.CurrentTL : target.CurrentAC;
+                    var flybyArcs = chooseArc ? ShipInstance.StandardWeaponArcs.ToList() : new List<FiringArc> { ship.FlybyFiringArc ?? weapon.Arc };
+                    var chances = flybyArcs.Where(a => ship.WeaponActionPenalty(weapon, target.Position, a) != int.MinValue)
+                        .ToDictionary(a => a, a => CombatResolver.HitChancePercent(bonus + ship.WeaponActionPenalty(weapon, target.Position, a), defense));
+                    if (chances.Count == 0) continue;
                     options.Add(new TargetOption(CombineLinkedWeapon(ship, wi, mountIndices).Name, target.InstanceId, 1,
-                        CombatResolver.HitChancePercent(bonus, defense), wi, 0, 0, weapon.Arc, weapon.BroadArc,
-                        chooseArc, chooseArc ? [FiringArc.Forward, FiringArc.Starboard, FiringArc.Aft, FiringArc.Port] : [], true));
+                        chances.Values.Max(), wi, 0, 0, weapon.Arc, weapon.BroadArc,
+                        chooseArc, chooseArc ? chances.Keys.ToList() : [], true) { ArcHitChances = chances });
                     continue;
                 }
                 int range = ship.Position.DistanceTo(target.Position);
@@ -1393,10 +1421,14 @@ public sealed class CombatEngine
                 };
                 int rangePenalty = weapon.RangePenalty(range);
                 int arcPenalty = weapon.ArcPenalty(angle);
-                int effectiveBonus = bonus == int.MinValue ? bonus : bonus + rangePenalty + arcPenalty;
-                int hitChance = CombatResolver.HitChancePercent(effectiveBonus, defenseValue);
+                var firingArcs = weapon.Arc == FiringArc.AllArcs && choices.Count > 0 ? choices : FiringArcsFor(weapon, angle).ToList();
+                if (weapon.Arc == FiringArc.AllArcs && _targetArcChoices.TryGetValue((ship.InstanceId, target.InstanceId), out var chosen)) firingArcs = [chosen];
+                var chancesByArc = firingArcs.Where(a => ship.WeaponActionPenalty(weapon, target.Position, a) != int.MinValue)
+                    .ToDictionary(a => a, a => CombatResolver.HitChancePercent(bonus + ship.WeaponActionPenalty(weapon, target.Position, a) + rangePenalty + arcPenalty, defenseValue));
+                if (chancesByArc.Count == 0) continue;
+                int hitChance = chancesByArc.Values.Max();
                 bool choiceRequired = choices.Count > 1 && !_targetArcChoices.ContainsKey((ship.InstanceId, target.InstanceId));
-                options.Add(new TargetOption(CombineLinkedWeapon(ship, wi, mountIndices).Name, target.InstanceId, range, hitChance, wi, rangePenalty, arcPenalty, weapon.Arc, weapon.BroadArc, choiceRequired, choices));
+                options.Add(new TargetOption(CombineLinkedWeapon(ship, wi, mountIndices).Name, target.InstanceId, range, hitChance, wi, rangePenalty, arcPenalty, weapon.Arc, weapon.BroadArc, choiceRequired, choices) { ArcHitChances = chancesByArc });
             }
         }
         return options;
@@ -1478,6 +1510,11 @@ public sealed class CombatEngine
 
     private static bool IsSharedArcBoundary(double angle)
         => Math.Abs(Math.Abs(angle) - 30) <= 0.01 || Math.Abs(Math.Abs(angle) - 150) <= 0.01;
+
+    private static IEnumerable<FiringArc> FiringArcsFor(Weapon weapon, double angle)
+        => weapon.Arc == FiringArc.AllArcs
+            ? ShipInstance.StandardWeaponArcs.Where(a => (weapon with { Arc = a, BroadArc = false }).CoversAngle(angle))
+            : [weapon.Arc];
 
     private static string ProjectileDisplayName(string weaponName)
         => weaponName.EndsWith(" Launcher", StringComparison.OrdinalIgnoreCase)
@@ -1584,7 +1621,8 @@ public sealed class CombatEngine
         double angle = target.AngleFromFacing(impact.ImpactFrom);
         return target.Weapons.Select((weapon, index) => (weapon, index))
             .Where(x => x.weapon.PointDefenseBonus > 0 && x.weapon.CoversAngle(angle) &&
-                !_pointDefenseUsed.Contains((target.InstanceId, x.index)) && target.HasWeaponUses(x.index))
+                !_pointDefenseUsed.Contains((target.InstanceId, x.index)) && target.HasWeaponUses(x.index) &&
+                target.WeaponActionPenalty(x.weapon, impact.ImpactFrom) != int.MinValue)
             .Select(x => x.index).ToList();
     }
 
@@ -1643,11 +1681,25 @@ public sealed class CombatEngine
             LastEvents.Add(new CombatEvent("Gunnery", target.InstanceId,
                 $"{ShipLogName(target)} uses {weapon.Name} for point defense against {ProjectileLogName(impact.Projectile)}: {CombatResolver.FormatCheck(roll, weapon.PointDefenseBonus, total)} vs DC {dc} — {(hit ? "HIT, projectile destroyed." : "MISS.")}"));
             if (!hit) continue;
+            var before = DamageState.Capture(target);
+            target.DamageReport.Add(new ReceivedDamageEvent(_state.Round, _state.Phase,
+                impact.Projectile.OwnerShipId, AttackerName(impact.Projectile.OwnerShipId), impact.Projectile.Weapon.Name,
+                impact.Projectile.Id, true, weapon.Name, null, 0, 0, 0, 0, before, before, [])
+                { DefenseWeaponArc = weapon.Arc });
             _pendingProjectileImpacts.Remove(impact);
             _state.Projectiles.RemoveAll(projectile => projectile.Id == impact.Projectile.Id);
             break;
         }
     }
+
+    private string AttackerName(string id) => _state.GetShip(id) is { } ship ? _state.DisplayName(ship) : id;
+
+    private void RecordDamage(string attackerId, string weapon, ShipInstance target, Quadrant quadrant,
+        int rawDamage, int shieldDamage, int hullDamage, DamageState before,
+        IReadOnlyList<CriticalDamageEffect> criticalEffects, string? projectileId = null)
+        => target.DamageReport.Add(new ReceivedDamageEvent(_state.Round, _state.Phase, attackerId,
+            AttackerName(attackerId), weapon, projectileId, false, null, quadrant, rawDamage, shieldDamage,
+            hullDamage, Math.Max(0, rawDamage - shieldDamage - hullDamage), before, DamageState.Capture(target), criticalEffects));
 
     private void FinishGunneryResolution()
     {
@@ -1664,8 +1716,12 @@ public sealed class CombatEngine
                 if (target is null || target.IsDestroyed) continue;
                 ShipSystem? targetedSystem = _targetedSystems.Remove((projectile.OwnerShipId, target.InstanceId), out var chosenSystem) ? chosenSystem : null;
                 bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
+                var before = DamageState.Capture(target);
                 var result = CombatResolver.ResolveProjectileImpact(projectile, target, _dice, impact.Roll, impact.CheckBonus, impact.Defense, impact.ImpactFrom,
                     _state.GetShip(projectile.OwnerShipId)?.DivertWeapons == true, targetedSystem);
+                var quadrant = projectile.FlybyQuadrant is { } selected ? target.ShieldQuadrantFor(selected) : target.QuadrantOf(impact.ImpactFrom);
+                RecordDamage(projectile.OwnerShipId, projectile.Weapon.Name, target, quadrant, result.DamageDealt,
+                    result.ShieldDamage, result.HullDamage, before, result.CriticalEffects, projectile.Id);
                 string ownerName = _state.GetShip(projectile.OwnerShipId) is { } owner ? ShipLogName(owner) : $"Team {projectile.TeamId + 1}";
                 LastEvents.Add(new CombatEvent("Gunnery", projectile.OwnerShipId,
                     $"{ownerName}'s {ProjectileLogName(projectile)} hits {ShipLogName(target)}: {result.Description}"));
@@ -1678,7 +1734,10 @@ public sealed class CombatEngine
                 ShipSystem? targetedSystem = savedTargetedSystem ?? (_targetedSystems.Remove((attacker.InstanceId, target.InstanceId), out var chosenSystem) ? chosenSystem : null);
                 int rolledDamage = weapon.Damage.Roll(_dice, attacker.DivertWeapons);
                 bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
+                var before = DamageState.Capture(target);
                 var damage = CombatResolver.ApplyDamage(target, quadrant, rolledDamage, check.Roll, _dice, targetedSystem);
+                RecordDamage(attacker.InstanceId, weapon.Name, target, quadrant, rolledDamage, damage.ShieldDamage,
+                    damage.HullDamage, before, damage.CriticalEffects);
                 LastEvents.Add(new CombatEvent("Gunnery", attacker.InstanceId,
                     $"{ShipLogName(attacker)} → {ShipLogName(target)} · {weapon.Name}: {damage.Description}."));
                 LogShipStatusChange(target, wasDisabled, wasDestroyed, "Gunnery");

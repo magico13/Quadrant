@@ -134,6 +134,7 @@ public class GameController : ControllerBase
                 q = s.Position.Q,
                 r = s.Position.R,
                 facing = (int)s.Facing,
+                damageReport = s.DamageReport,
                 hull = s.HullPoints,
                 maxHull = s.MaxHullPoints,
                 speed = s.Speed,
@@ -149,6 +150,7 @@ public class GameController : ControllerBase
                 flybyTargetId = s.FlybySucceeded && s.FlybyCrossed ? s.FlybyTargetId : null,
                 flybyFiringArc = s.FlybyFiringArc,
                 shields = new { forward = s.Shields.Forward, starboard = s.BarrelRollActive ? s.Shields.Port : s.Shields.Starboard, aft = s.Shields.Aft, port = s.BarrelRollActive ? s.Shields.Starboard : s.Shields.Port },
+                initialShields = new { forward = s.Definition.Shields.Forward, starboard = s.BarrelRollActive ? s.Definition.Shields.Port : s.Definition.Shields.Starboard, aft = s.Definition.Shields.Aft, port = s.BarrelRollActive ? s.Definition.Shields.Starboard : s.Definition.Shields.Port },
                 maxShield = s.Definition.Shields.Forward, // client uses this for arc opacity scaling
                 shieldCapacity = s.Definition.Shields.Forward + s.Definition.Shields.Starboard + s.Definition.Shields.Aft + s.Definition.Shields.Port,
                 shieldDivertMax = Math.Max(0, Math.Min(s.Definition.PowerCorePcu / 20,
@@ -157,6 +159,11 @@ public class GameController : ControllerBase
                 engineeringActionsUsed = s.EngineeringActionsUsed,
                 diverted = new { engines = s.DivertEngines, weapons = s.DivertWeapons, science = s.DivertScience },
                 heldSystem = s.Systems.HeldSystem,
+                heldWeaponArc = s.Systems.HeldWeaponArc,
+                weaponArcs = ShipInstance.StandardWeaponArcs.Where(a => s.OccupiedWeaponArcs.Contains(s.InstalledWeaponArc(a)))
+                    .Select(arc => new { arc, installedArc = s.InstalledWeaponArc(arc),
+                        condition = s.Systems.GetWeaponArc(s.InstalledWeaponArc(arc)),
+                        effectiveCondition = s.Systems.GetEffectiveWeaponArc(s.InstalledWeaponArc(arc)) }),
                 systems = Enum.GetValues<ShipSystem>().Select(system => new { system, condition = s.Systems.Get(system), effectiveCondition = s.Systems.GetEffective(system) }),
                 crew = s.Definition.Crew.Select((c, i) =>
                 {
@@ -209,6 +216,7 @@ public class GameController : ControllerBase
             projectiles = projectileViews,
             options,
             // Include the complete history so a reopened game shows what happened.
+            damageReportRound = state.DamageReportRound,
             log = state.BattleLog.Select(e => new { phase = e.Phase, shipId = e.ShipId, message = e.Message }).ToList()
         });
         return result;

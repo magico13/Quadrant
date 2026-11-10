@@ -235,6 +235,7 @@ select option { background: var(--panel); color: var(--text); }
 #action-panel > :not(.crew-roles-list) {
     flex-shrink: 0;
 }
+.science-action-buttons { display: flex; flex-direction: column; gap: 8px; }
 .crew-roles-list {
     overflow-y: auto;
     overflow-x: hidden;
@@ -368,18 +369,173 @@ select option { background: var(--panel); color: var(--text); }
     position: fixed;
     top: 64px;
     left: 16px;
-    width: 280px;
+    width: min(440px, calc(100vw - 32px));
+    box-sizing: border-box;
     max-height: calc(100vh - 96px);
     overflow-y: auto;
     background: var(--panel);
     border: 1px solid var(--panel-border);
     border-radius: 8px;
-    padding: 14px;
+    padding: 10px;
     z-index: 50;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
 }
 
 #ship-details.hidden { display: none; }
+#ship-details { scrollbar-color: #496a83 var(--panel); }
+#ship-details .schematic-effect { height: 92px; min-height: 0; box-sizing: border-box; overflow-y: auto; }
+
+#system-target-dialog {
+    width: min(440px, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+    margin: auto;
+    padding: 10px;
+    overflow-y: auto;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    scrollbar-color: #496a83 var(--panel);
+    box-shadow: 0 8px 32px #0008;
+}
+#system-target-dialog::backdrop { background: #050b1459; }
+.system-picker-actions { display: flex; gap: 8px; margin-top: 10px; }
+#system-target-dialog .schematic-effect { min-height: 92px; box-sizing: border-box; }
+
+#balance-dialog {
+    width: min(460px, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+    margin: auto;
+    padding: 10px;
+    overflow-y: auto;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    scrollbar-color: #496a83 var(--panel);
+    box-shadow: 0 8px 32px #0008;
+}
+#balance-dialog::backdrop { background: #050b1459; }
+#divert-dialog {
+    width: min(520px, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+    margin: auto;
+    padding: 10px;
+    overflow-y: auto;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    scrollbar-color: #496a83 var(--panel);
+    box-shadow: 0 8px 32px #0008;
+}
+#divert-dialog::backdrop { background: #050b1459; }
+.divert-blueprint .schematic-effect { min-height: 0; }
+.schematic-component.schematic-divert-system { width: 27%; max-width: 126px; padding: 5px 3px; border-radius: 7px; background: #06182af5; }
+.schematic-component.schematic-divert-system span { font-size: 11px; font-weight: 600; }
+.divert-shield-arc {
+    position: absolute; left: calc(var(--x) * 1%); top: calc(var(--y) * 1%); transform: translate(-50%, -50%); z-index: 2;
+    display: flex; width: clamp(100px, 27%, 134px); box-sizing: border-box; flex-direction: column; align-items: stretch; gap: 3px;
+    padding: 4px; border: 1px solid #8dceff70; border-radius: 7px; background: #06182af5; box-shadow: 0 2px 10px #020b16a8;
+}
+.divert-shield-arc.divert-shield-selected { border-color: var(--accent); background: #123552f7; box-shadow: 0 0 0 1px var(--accent), 0 2px 10px #020b16a8; }
+.divert-shield-toggle { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 1px; border: 0; color: #c9ebff; background: transparent; cursor: pointer; font: inherit; line-height: 1.15; }
+.divert-shield-toggle:hover, .divert-shield-toggle:focus-visible { color: #fff; outline: 1px solid #b4e1ff; border-radius: 4px; }
+.divert-shield-toggle:disabled { cursor: default; opacity: .65; }
+.divert-shield-toggle > span { font-size: 9px; text-transform: uppercase; letter-spacing: .7px; }
+.divert-shield-toggle > strong { white-space: nowrap; color: #f1f8ff; font-size: 12px; font-variant-numeric: tabular-nums; }
+.divert-shield-toggle small { color: #c9dced; font-size: 8px; font-weight: 400; }
+.divert-shield-arc.divert-shield-selected .divert-shield-toggle > strong { color: #8fe3bd; }
+.divert-arc-controls { display: flex; align-items: center; gap: 4px; }
+.divert-arc-controls input[type="range"] { min-width: 0; width: 100%; accent-color: var(--accent); }
+.divert-arc-controls input[type="number"] { width: 38px; box-sizing: border-box; padding: 2px; border: 1px solid var(--panel-border); border-radius: 4px; background: #0b1a29; color: var(--text); font: inherit; font-size: 10px; text-align: center; }
+.divert-dialog-actions { justify-content: center; }
+.divert-dialog-actions .btn { min-width: 118px; }
+.balance-arc {
+    position: absolute; left: calc(var(--x) * 1%); top: calc(var(--y) * 1%); transform: translate(-50%, -50%);
+    z-index: 2; display: flex; width: clamp(108px, 31%, 142px); box-sizing: border-box; flex-direction: column; align-items: center; gap: 3px;
+    padding: 6px 5px; border: 1px solid #8dceff75; border-radius: 7px; color: #c9ebff; background: #06182af5;
+    box-shadow: 0 2px 10px #020b16a8; text-align: center; cursor: pointer; line-height: 1.15;
+}
+.balance-arc:hover, .balance-arc:focus-visible { outline: 2px solid #b4e1ff; outline-offset: 1px; background: #102b43; }
+.balance-arc.balance-selected { border-color: var(--accent); background: #123552f7; box-shadow: 0 0 0 1px var(--accent), 0 2px 10px #020b16a8; }
+.balance-arc-name { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+.balance-values { display: flex; align-items: baseline; justify-content: center; gap: 3px; white-space: nowrap; font-size: 10px; }
+.balance-values strong { color: #f1f8ff; font-size: 16px; font-variant-numeric: tabular-nums; }
+.balance-values .balance-projected { color: #8fe3bd; }
+.balance-values small { color: #c9dced; font-size: 9px; }
+.balance-role { color: #8dceff; font-size: 7px; text-transform: uppercase; letter-spacing: .5px; }
+.balance-options { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px 10px; padding: 8px 10px; border-top: 1px solid #83cfff25; }
+.balance-evenly-btn { padding: 6px 12px; border-color: #8dceff80; color: #c9ebff; background: #10263bef; font-size: 12px; font-weight: 600; }
+.balance-evenly-btn:hover:not(:disabled) { background: #203c53f5; border-color: var(--accent); }
+.balance-options > span { color: var(--text-dim); font-size: 10px; }
+#balance-dialog .schematic-effect { min-height: 0; padding: 8px 10px; line-height: 1.4; }
+#balance-dialog .schematic-effect:empty { display: none; }
+.balance-dialog-actions { justify-content: center; margin-top: 12px; }
+.balance-dialog-actions .btn { min-width: 118px; }
+.balance-transfer-control { display: grid; gap: 7px; margin: 12px 2px 4px; }
+.balance-transfer-control label { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text); font-size: 13px; }
+.balance-transfer-control input[type="number"] { width: 76px; padding: 5px 7px; border-radius: 4px; border: 1px solid var(--panel-border); background: #0b1a29; color: var(--text); font: inherit; text-align: center; }
+.balance-transfer-control input[type="range"] { width: 100%; accent-color: var(--accent); }
+.balance-transfer-control .hint { margin: 0; }
+.ship-blueprint {
+    color: #c9ebff;
+    border: 1px solid #83cfff40;
+    border-radius: 8px;
+    background-color: #091d30e8;
+    background-image: linear-gradient(#8dceff09 1px, transparent 1px), linear-gradient(90deg, #8dceff09 1px, transparent 1px);
+    background-size: 22px 22px;
+    overflow: hidden;
+}
+.blueprint-caption { padding: 10px 10px 0; font: 10px monospace; letter-spacing: 2px; color: #8dceff; }
+.schematic-stage { position: relative; width: 100%; aspect-ratio: 620 / 570; }
+.schematic-drawing { position: absolute; inset: 0; width: 100%; height: 100%; }
+.schematic-hull { fill: #8dceff0d; stroke: #b4e1ff80; stroke-width: 1.5; }
+.schematic-shield-lines { fill: none; stroke: #7dcfff; stroke-width: 3; }
+.schematic-component, .schematic-shield {
+    position: absolute; left: calc(var(--x) * 1%); top: calc(var(--y) * 1%); transform: translate(-50%, -50%);
+    text-align: center;
+}
+.schematic-component {
+    width: 24%; max-width: 110px; padding: 4px 2px; border: 1px solid currentColor; border-radius: 5px;
+    background: #10263bef; color: #c9ebff; font: inherit; cursor: pointer;
+    box-shadow: 0 0 16px #8dceff0c;
+}
+.schematic-component span, .schematic-component strong, .schematic-component small { display: block; }
+.schematic-component span { font-size: clamp(9px, 1.8vw, 11px); }
+.schematic-component.schematic-mount span { white-space: nowrap; font-size: 9px; }
+.schematic-component strong { margin-top: 2px; font-size: 10px; }
+.schematic-component small { margin-top: 2px; font-size: 9px; color: #e4f2ff; }
+.schematic-component:hover, .schematic-component:focus-visible, .schematic-component[aria-pressed="true"] {
+    outline: 2px solid currentColor; outline-offset: 3px; background: #203c53f5;
+}
+.condition-glitching { color: #ffe080; }
+.condition-malfunctioning { color: #ffad60; }
+.condition-wrecked { color: #ff7d87; }
+.schematic-component.condition-glitching { background: #40381def; }
+.schematic-component.condition-malfunctioning { background: #482d1aef; }
+.schematic-component.condition-wrecked { background: #451e2bef; }
+.schematic-shield { font: inherit; font-size: clamp(9px, 1.8vw, 11px); line-height: 1.35; border: 0; padding: 0; color: inherit; background: transparent; }
+.schematic-shield:disabled { cursor: default; }
+.schematic-shield.balance-selectable { cursor: pointer; border-radius: 6px; padding: 3px 6px; transition: background .15s, outline .15s; }
+.schematic-shield.balance-selectable:hover, .schematic-shield.balance-selectable:focus-visible { outline: 1px solid #b4e1ff; background: #173b55d9; }
+.schematic-shield.balance-selected { outline: 2px solid var(--accent); background: #17405de8; }
+.schematic-shield span { display: block; text-transform: uppercase; letter-spacing: 1px; }
+.schematic-shield strong { font-size: 17px; color: #ecf7ff; }
+.schematic-shield small { font-size: 9px; font-weight: normal; }
+.schematic-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 7px 15px; padding: 8px; border-top: 1px solid #83cfff25; font-size: 10px; }
+.schematic-effect { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; min-height: 64px; background: #030d1855; font-size: 12px; line-height: 1.5; }
+.schematic-effect strong { color: #f1f8ff; }
+.schematic-hint { padding: 6px 10px; font-size: 11px; }
+.ship-specifications { margin-top: 14px; }
+.ship-specifications summary { cursor: pointer; color: var(--text-dim); font-size: 12px; padding: 8px 0 12px; }
+@media (max-width: 520px) {
+    .schematic-component { padding: 3px 1px; }
+    .schematic-component span, .schematic-component strong { font-size: 9px; }
+    .schematic-component small { font-size: 8px; margin-top: 1px; }
+    .schematic-component.schematic-divert-system { width: 27%; padding: 4px 2px; }
+    .divert-shield-arc { width: clamp(100px, 27%, 122px); }
+}
 
 .sd-header {
     display: flex;
@@ -389,10 +545,12 @@ select option { background: var(--panel); color: var(--text); }
     padding-bottom: 8px;
     border-bottom: 1px solid var(--panel-border);
 }
-.sd-name { font-size: 15px; font-weight: 700; }
+.sd-name { font-size: 15px; font-weight: 700; min-width: 0; overflow-wrap: anywhere; }
+.sd-actions { display: flex; align-items: stretch; flex-shrink: 0; gap: 6px; margin-left: 8px; }
 .sd-header.p1 .sd-name { color: var(--p1); }
 .sd-header.p2 .sd-name { color: var(--p2); }
-.sd-close { padding: 2px 8px; font-size: 16px; line-height: 1; }
+.sd-close, .damage-report-button { height: 32px; box-sizing: border-box; }
+.sd-close { width: 32px; flex-shrink: 0; padding: 2px 8px; font-size: 16px; line-height: 1; }
 
 .detail-grid {
     display: grid;
@@ -447,6 +605,7 @@ select option { background: var(--panel); color: var(--text); }
 .detail-list { list-style: none; font-size: 12px; }
 .detail-list-damaged { color: #ffab91; }
 .detail-list li { padding: 2px 0; }
+.detail-crew { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr)); column-gap: 12px; }
 
 .ship-status {
     margin-top: 12px;
@@ -703,3 +862,40 @@ select option { background: var(--panel); color: var(--text); }
 .roster-entry .roster-name, .sd-header .sd-name { color: var(--team-color); }
 #team-list { display: flex; flex-direction: column; gap: 16px; }
 .cc-add { flex-wrap: wrap; }
+
+/* Received damage report: stays open independently of Ship Details. */
+#damage-report {
+    position: fixed;
+    top: 64px;
+    left: 16px;
+    width: min(380px, calc(100vw - 32px));
+    max-height: calc(100vh - 96px);
+    overflow-y: auto;
+    box-sizing: border-box;
+    padding: 14px;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    z-index: 51;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+#damage-report.hidden { display: none; }
+#ship-details:not(.hidden) + #damage-report { left: 472px; }
+.damage-report-button { padding: 6px 10px; font-size: 13px; }
+.damage-changes { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 12px; }
+.damage-changes th { text-align: left; font-weight: normal; opacity: 0.65; }
+.damage-changes th, .damage-changes td { padding: 6px 3px; border-bottom: 1px solid var(--panel-border); }
+.damage-changes strong { color: #ffb478; white-space: nowrap; }
+.damage-events { padding-left: 24px; margin: 0; font-size: 12px; }
+.damage-event { padding: 9px 0; border-bottom: 1px solid var(--panel-border); overflow-wrap: anywhere; }
+.damage-event small { opacity: 0.6; }
+.damage-event-effects { margin-top: 4px; font-weight: 600; }
+@media (max-width: 867px) {
+    /* Keep both independently scrollable when they cannot fit side by side. */
+    #ship-details:not(.hidden):has(+ #damage-report:not(.hidden)) { max-height: calc(50dvh - 64px); }
+    #ship-details:not(.hidden) + #damage-report {
+        left: 16px;
+        top: calc(50dvh + 16px);
+        max-height: calc(50dvh - 48px);
+    }
+}

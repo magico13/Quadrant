@@ -29,8 +29,12 @@
         </main>
     </div>
 
-    <div id="ship-details" class="hidden"></div>
+    <div id="ship-details" class="hidden" role="dialog" aria-label="Ship details and schematic"></div>
+    <section id="damage-report" class="hidden" aria-label="Damage report"></section>
     <div id="ship-tooltip" class="hidden"></div>
+    <dialog id="system-target-dialog" aria-labelledby="system-target-title"></dialog>
+    <dialog id="balance-dialog" aria-labelledby="balance-title"></dialog>
+    <dialog id="divert-dialog" aria-labelledby="divert-title"></dialog>
 
     <!-- Fleet setup overlay: pick ships for each team before launching. -->
     <div id="setup-overlay" class="hidden">
@@ -58,6 +62,7 @@
     </div>
 
     <script src="js/hex.js"></script>
+    <script src="js/ship-schematic.js"></script>
     <script src="js/game.js"></script>
 </body>
 </html>

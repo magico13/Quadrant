@@ -10,6 +10,13 @@ const phaseEl = document.getElementById('phase-indicator');
 const roundEl = document.getElementById('round-indicator');
 const roomEl = document.getElementById('room-code');
 const shipDetailsEl = document.getElementById('ship-details');
+const systemTargetDialog = document.getElementById('system-target-dialog');
+const balanceDialog = document.getElementById('balance-dialog');
+const divertDialog = document.getElementById('divert-dialog');
+const damageReportEl = document.getElementById('damage-report');
+let damageReportOpen = false;
+let reportShipId = null;
+
 const tooltipEl = document.getElementById('ship-tooltip');
 
 let roomCode = null;
@@ -20,6 +27,9 @@ let selectedTargetArcs = new Map();
 let detailsShipId = null;  // ship currently shown in the details panel
 let lastActiveShipId = null;
 let pendingMove = null;    // helm: { option, actorId } — move previewed, awaiting confirmation
+let pendingSystemTarget = null; // Local preview; popup confirmation spends an action.
+let pendingShieldBalance = null; // Local shield transfer preview until confirmed.
+let pendingDivert = null; // Local Divert selection until confirmed.
 let refreshGunnery = null; // module-scope handle to the current gunnery refresh fn
 let renderedLogCount = 0;
 
@@ -85,12 +95,17 @@ async function newGame() {
 async function launchGame(selections) {
     const res = await api('/start', { selections });
     roomCode = res.roomCode;
+    clearSystemTargeting();
+    clearShieldBalancing();
     selectedShots.clear();
     selectedTargetArcs.clear();
     activeWeapon = null;
     detailsShipId = null;
     lastActiveShipId = null;
     hideShipDetails();
+    damageReportOpen = false;
+    reportShipId = null;
+    damageReportEl.classList.add('hidden');
     logEl.innerHTML = '';
     renderedLogCount = 0;
     hideSetup();
@@ -221,6 +236,9 @@ document.getElementById('btn-setup-defaults').addEventListener('click', () => {
 
 function render() {
     if (!state) return;
+    if (pendingSystemTarget && !canContinueSystemTargeting()) clearSystemTargeting();
+    if (pendingShieldBalance && !canContinueShieldBalancing()) clearShieldBalancing();
+    if (pendingDivert && !canContinueDivert()) clearDivert();
 
     phaseEl.textContent = state.phase === 'CrewSetup' ? 'Crew Setup' : state.phase;
     roundEl.textContent = `Round ${state.round}`;
@@ -229,6 +247,8 @@ function render() {
     if (state.currentActorId) {
         if (detailsShipId && lastActiveShipId && lastActiveShipId !== state.currentActorId)
             detailsShipId = state.currentActorId;
+        if (damageReportOpen && lastActiveShipId && lastActiveShipId !== state.currentActorId)
+            reportShipId = state.currentActorId;
         lastActiveShipId = state.currentActorId;
     }
 
@@ -245,6 +265,7 @@ function render() {
 
     renderRoster();
 
+    renderDamageReport();
     if (state.pendingPointDefense) {
         renderPointDefense(state.pendingPointDefense);
         return;
@@ -266,7 +287,10 @@ function render() {
     switch (state.phase) {
         case 'Setup': renderSetup(); break;
         case 'CrewSetup': renderRoles(); break;
-        case 'Engineering': renderEngineering(); break;
+        case 'Engineering':
+            renderEngineering();
+            if (pendingDivert) renderDivertDialog();
+            break;
         case 'Helm': renderHelm(); break;
         case 'Gunnery': renderGunnery(); break;
         default: renderComplete();
@@ -346,6 +370,7 @@ function renderRoster() {
     rosterEl.querySelectorAll('.roster-entry').forEach(el => {
         el.addEventListener('click', () => {
             const ship = state.ships.find(s => s.id === el.dataset.ship);
+            if (ship && pendingSystemTarget) { chooseSystemTarget(ship); return; }
             if (ship) { detailsShipId = ship.id; showShipDetails(ship); grid.centerOn(ship.q, ship.r); }
             const projectile = (state.projectiles || []).find(p => p.id === el.dataset.projectile);
             if (projectile) grid.centerOn(projectile.q, projectile.r);
@@ -408,45 +433,41 @@ function renderEngineering() {
             const engineers = (ship.crew || []).map((crew, i) => ({ ...crew, i })).filter(c => c.role === 'Engineer' && !c.actionUsed);
             const used = new Set(ship.engineeringActionsUsed || []);
             const options = [];
-            if (!used.has('Divert')) for (const target of ['Engines', 'Science', 'Weapons', 'Shields'])
-                options.push(`<option value="Divert|${target}">Divert — ${target}</option>`);
-            if (!used.has('Hold It Together')) for (const system of (ship.systems || []).filter(system => system.condition !== 'None'))
+            if (!used.has('Hold It Together')) for (const system of (ship.systems || []).filter(system => system.system !== 'WeaponsArray' && system.condition !== 'None'))
                 options.push(`<option value="Hold It Together|${system.system}">Hold It Together — ${system.system} (${system.condition})</option>`);
+            if (!used.has('Hold It Together')) for (const arc of (ship.weaponArcs || []).filter(arc => arc.condition !== 'None'))
+                options.push(`<option value="Hold It Together|WeaponsArray|${arc.installedArc}">Hold It Together — ${arc.arc} weapons (${arc.condition})</option>`);
             return `<div class="detail-section" style="color:${teamColor(ship.teamId)}">${ship.name} (Team ${ship.teamId + 1})</div>
-                ${engineers.length && options.length ? `<div class="eng-row"><label>Engineer</label><select id="engineer-${ship.id}">${engineers.map(c => `<option value="${c.i}">${c.primaryRole} ${c.i + 1} (${c.roleBonus >= 0 ? '+' : ''}${c.roleBonus})</option>`).join('')}</select></div>
-                <div class="eng-row"><label>Action</label><select id="engineering-action-${ship.id}">${options.join('')}</select></div>
-                <div id="shield-allocation-${ship.id}" hidden><div class="hint">Distribute ${ship.shieldDivertMax} shield points (total capacity ${ship.shieldCapacity}).</div>
-                ${['forward', 'starboard', 'aft', 'port'].map(q => `<div class="eng-row"><label>${q[0].toUpperCase() + q.slice(1)} (${ship.shields[q]} current)</label><input type="number" id="shield-${ship.id}-${q}" min="0" max="${ship.shieldDivertMax}" value="0"></div>`).join('')}</div>
-                <button class="btn btn-ghost" data-engineering-ship="${ship.id}">Attempt Action</button>
-                <div class="hint" id="engineering-error-${ship.id}"></div>` : '<div class="hint">No available engineer action.</div>'}`;
+                ${engineers.length ? `<div class="eng-row"><label>Engineer</label><select id="engineer-${ship.id}">${engineers.map(c => `<option value="${c.i}">${c.primaryRole} ${c.i + 1} (${c.roleBonus >= 0 ? '+' : ''}${c.roleBonus})</option>`).join('')}</select></div>
+                ${!used.has('Divert') ? `<button class="btn btn-ghost" data-divert-ship="${ship.id}">Divert Power</button>` : ''}
+                ${options.length ? `<div class="eng-row"><label>Hold action</label><select id="engineering-action-${ship.id}">${options.join('')}</select></div>
+                    <button class="btn btn-ghost" data-engineering-ship="${ship.id}">Attempt Hold It Together</button>
+                    <div class="hint" id="engineering-error-${ship.id}"></div>` : ''}
+                ${used.has('Divert') && !options.length ? '<div class="hint">No available engineer action.</div>' : ''}` : '<div class="hint">No available engineer action.</div>'}`;
         }).join('')}
         <button class="btn btn-primary" id="btn-end-eng">End Engineering</button>`;
     for (const ship of ships) {
         const select = document.getElementById(`engineering-action-${ship.id}`);
-        if (!select) continue;
         const memoryKey = `quadrant:${roomCode}:engineering:${ship.id}`;
-        const remembered = localStorage.getItem(memoryKey);
-        if (remembered && [...select.options].some(option => option.value === remembered))
-            select.value = remembered;
-        const shieldPanel = document.getElementById(`shield-allocation-${ship.id}`);
         const engineerSelect = document.getElementById(`engineer-${ship.id}`);
-        const button = actionPanel.querySelector(`[data-engineering-ship="${ship.id}"]`);
+        if (!engineerSelect) continue;
+        const remembered = localStorage.getItem(memoryKey);
+        if (select && remembered && [...select.options].some(option => option.value === remembered)) select.value = remembered;
+        const holdButton = actionPanel.querySelector(`[data-engineering-ship="${ship.id}"]`);
+        const divertButton = actionPanel.querySelector(`[data-divert-ship="${ship.id}"]`);
         const update = () => {
-            shieldPanel.hidden = select.value !== 'Divert|Shields';
-            const chances = ship.crew[Number(engineerSelect.value)].engineeringChances;
-            const chance = select.value.startsWith('Divert|') ? chances.divert : chances.hold;
-            button.textContent = `Attempt Action (${chance}% success)`;
+            const crew = ship.crew[Number(engineerSelect.value)];
+            if (holdButton) holdButton.textContent = `Attempt Hold It Together (${crew.engineeringChances.hold}% success)`;
+            if (divertButton) divertButton.textContent = `Divert Power (${crew.engineeringChances.divert}% success)`;
         };
-        select.addEventListener('change', update);
+        select?.addEventListener('change', () => localStorage.setItem(memoryKey, select.value));
         engineerSelect.addEventListener('change', update);
-        select.addEventListener('change', () => localStorage.setItem(memoryKey, select.value));
         update();
-        actionPanel.querySelector(`[data-engineering-ship="${ship.id}"]`).addEventListener('click', async () => {
-            const [action, target] = select.value.split('|');
-            const shields = target === 'Shields' ? Object.fromEntries(['forward', 'starboard', 'aft', 'port']
-                .map(q => [q, Number(document.getElementById(`shield-${ship.id}-${q}`).value)])) : null;
+        divertButton?.addEventListener('click', () => startDivert(ship.id, Number(engineerSelect.value)));
+        holdButton?.addEventListener('click', async () => {
+            const [action, target, weaponArc] = select.value.split('|');
             try {
-                await api(`/${roomCode}/engineering`, { shipId: ship.id, crewIndex: Number(document.getElementById(`engineer-${ship.id}`).value), action, target, shields });
+                await api(`/${roomCode}/engineering`, { shipId: ship.id, crewIndex: Number(engineerSelect.value), action, target, weaponArc });
                 await fetchState();
             } catch (err) { document.getElementById(`engineering-error-${ship.id}`).textContent = `Could not attempt action: ${err.message}`; }
         });
@@ -457,10 +478,472 @@ function renderEngineering() {
     });
 }
 
+const DIVERT_ARCS = ['forward', 'starboard', 'aft', 'port'];
+
+function divertShip() {
+    return pendingDivert ? state?.ships.find(ship => ship.id === pendingDivert.shipId) : null;
+}
+
+function canContinueDivert() {
+    const pending = pendingDivert;
+    const ship = divertShip();
+    const engineer = ship?.crew?.[pending?.crewIndex];
+    return !!pending && !!ship && !!engineer && state.phase === 'Engineering' && !state.isComplete &&
+        state.round === pending.round && !ship.isDestroyed && !ship.isDisabled && engineer.role === 'Engineer' &&
+        !engineer.actionUsed && !(ship.engineeringActionsUsed || []).includes('Divert');
+}
+
+function clearDivert() {
+    pendingDivert = null;
+    if (divertDialog.open) divertDialog.close();
+}
+
+function startDivert(shipId, crewIndex) {
+    const ship = state?.ships.find(candidate => candidate.id === shipId);
+    if (state?.phase !== 'Engineering' || !ship || ship.isDestroyed || ship.isDisabled ||
+        ship.crew[crewIndex]?.role !== 'Engineer' || ship.crew[crewIndex]?.actionUsed ||
+        (ship.engineeringActionsUsed || []).includes('Divert')) return;
+    pendingDivert = { shipId, crewIndex, round: state.round, target: null, selectedShieldArcs: [],
+        shields: Object.fromEntries(DIVERT_ARCS.map(arc => [arc, 0])), submitting: false, error: '' };
+    detailsShipId = null;
+    hideShipDetails();
+    renderDivertDialog();
+}
+
+function splitDivertShieldPoints(ship, selectedArcs) {
+    const allocation = Object.fromEntries(DIVERT_ARCS.map(arc => [arc, 0]));
+    let remaining = Math.max(0, ship.shieldDivertMax ?? 0);
+    const capacities = Object.fromEntries(DIVERT_ARCS.map(arc => [arc, remaining]));
+    while (remaining > 0) {
+        const eligible = DIVERT_ARCS.filter(arc => selectedArcs.includes(arc) && allocation[arc] < capacities[arc]);
+        if (!eligible.length) break;
+        eligible.sort((a, b) => allocation[a] - allocation[b] || DIVERT_ARCS.indexOf(a) - DIVERT_ARCS.indexOf(b));
+        allocation[eligible[0]]++;
+        remaining--;
+    }
+    return allocation;
+}
+
+function adjustDivertShieldPoints(ship, selectedArcs, arc, requested) {
+    const allocation = Object.fromEntries(DIVERT_ARCS.map(candidate => [candidate, 0]));
+    const total = Math.max(0, ship.shieldDivertMax ?? 0);
+    const capacities = Object.fromEntries(DIVERT_ARCS.map(candidate => [candidate, total]));
+    allocation[arc] = Math.min(total, Math.max(0, Math.floor(requested)));
+    let remaining = total - allocation[arc];
+    while (remaining > 0) {
+        const eligible = DIVERT_ARCS.filter(candidate => candidate !== arc && selectedArcs.includes(candidate) && allocation[candidate] < capacities[candidate]);
+        if (!eligible.length) break;
+        eligible.sort((a, b) => allocation[a] - allocation[b] || DIVERT_ARCS.indexOf(a) - DIVERT_ARCS.indexOf(b));
+        allocation[eligible[0]]++;
+        remaining--;
+    }
+    return allocation;
+}
+
+function renderDivertDialog() {
+    if (!canContinueDivert()) {
+        clearDivert();
+        renderEngineering();
+        return;
+    }
+    const pending = pendingDivert;
+    const ship = divertShip();
+    const engineer = ship.crew[pending.crewIndex];
+    const chance = engineer.engineeringChances?.divert ?? null;
+    const shieldMax = ship.shieldDivertMax ?? 0;
+    const assigned = DIVERT_ARCS.reduce((sum, arc) => sum + (pending.shields[arc] || 0), 0);
+    const allocationValid = pending.target !== 'Shields' ||
+        (pending.selectedShieldArcs.length > 0 && assigned === shieldMax && DIVERT_ARCS.every(arc => pending.shields[arc] >= 0));
+    divertDialog.innerHTML = `<div class="sd-header"><span class="sd-name" id="divert-title">Divert Power · ${reportEscape(ship.name)}</span><button class="btn btn-ghost sd-close" id="btn-close-divert" aria-label="Close Divert dialog" ${pending.submitting ? 'disabled' : ''}>×</button></div>
+        ${ShipSchematic.render(ship, { mode: 'divert', selectedTarget: pending.target, selectedShieldArcs: pending.selectedShieldArcs,
+            shieldAllocations: pending.shields, shieldDivertMax: shieldMax, allocatedShieldPoints: assigned })}
+        <div class="system-picker-actions divert-dialog-actions"><button class="btn btn-primary" id="btn-confirm-divert" ${pending.submitting || !pending.target || !allocationValid ? 'disabled' : ''}>${pending.submitting ? 'Attempting…' : `Confirm Divert${chance != null ? ` (${chance}%)` : ''}`}</button><button class="btn btn-ghost" id="btn-cancel-divert" ${pending.submitting ? 'disabled' : ''}>Cancel</button></div>
+        <div class="hint" id="divert-error" role="status">${reportEscape(pending.error)}</div>`;
+    ShipSchematic.bind(divertDialog, ship, {
+        mode: 'divert', selectedTarget: pending.target,
+        shieldDivertMax: shieldMax, allocatedShieldPoints: assigned,
+        onTargetSelect: target => {
+            pending.target = target;
+            pending.selectedShieldArcs = [];
+            pending.shields = Object.fromEntries(DIVERT_ARCS.map(arc => [arc, 0]));
+            pending.error = '';
+            renderDivertDialog();
+        },
+        onShieldToggle: arc => {
+            const selected = new Set(pending.selectedShieldArcs);
+            if (pending.target === 'Shields' && selected.has(arc)) selected.delete(arc);
+            else selected.add(arc);
+            pending.selectedShieldArcs = DIVERT_ARCS.filter(candidate => selected.has(candidate));
+            pending.target = pending.selectedShieldArcs.length ? 'Shields' : null;
+            pending.shields = splitDivertShieldPoints(ship, pending.selectedShieldArcs);
+            pending.error = '';
+            renderDivertDialog();
+        },
+        onShieldAmount: (arc, value) => {
+            pending.shields = adjustDivertShieldPoints(ship, pending.selectedShieldArcs, arc, value);
+            pending.error = '';
+            renderDivertDialog();
+        }
+    });
+    document.getElementById('btn-confirm-divert').addEventListener('click', confirmDivert);
+    document.getElementById('btn-close-divert').addEventListener('click', () => { clearDivert(); renderEngineering(); });
+    document.getElementById('btn-cancel-divert').addEventListener('click', () => { clearDivert(); renderEngineering(); });
+    divertDialog.oncancel = event => {
+        if (pendingDivert?.submitting) { event.preventDefault(); return; }
+        clearDivert();
+        renderEngineering();
+    };
+    if (!divertDialog.open) divertDialog.showModal();
+}
+
+async function confirmDivert() {
+    if (!canContinueDivert() || pendingDivert.submitting) return;
+    const pending = pendingDivert;
+    if (!pending.target) return;
+    const shields = pending.target === 'Shields' ? Object.fromEntries(DIVERT_ARCS.map(arc => [arc, pending.shields[arc] || 0])) : null;
+    if (pending.target === 'Shields' && DIVERT_ARCS.reduce((sum, arc) => sum + shields[arc], 0) !== (divertShip()?.shieldDivertMax ?? 0)) return;
+    pending.submitting = true;
+    pending.error = '';
+    renderDivertDialog();
+    try {
+        await api(`/${roomCode}/engineering`, { shipId: pending.shipId, crewIndex: pending.crewIndex, action: 'Divert', target: pending.target, shields });
+    } catch (err) {
+        pending.submitting = false;
+        pending.error = `Could not divert power: ${err.message}`;
+        renderDivertDialog();
+        return;
+    }
+    clearDivert();
+    try { await fetchState(); }
+    catch (err) { renderEngineering(); addLog('error', `Divert was submitted, but state could not refresh: ${err.message}`); }
+}
+
+// Target System previews are local; only confirmation in the system popup rolls.
+function systemTargetLabel(system) {
+    return { PowerCore: 'Core', Engines: 'Engines', LifeSupport: 'Life Support', Sensors: 'Sensors', WeaponsArray: 'Weapons' }[system] || system;
+}
+
+function availableScienceOfficers(ship) {
+    return (ship?.crew || []).map((crew, index) => ({ ...crew, index }))
+        .filter(crew => crew.role === 'Science Officer' && !crew.actionUsed);
+}
+
+function targetSystemUnavailableReason(ship) {
+    if (!ship.hasSensors) return 'Target System requires sensors.';
+    const sensors = (ship.systems || []).find(s => s.system === 'Sensors');
+    if (['Malfunctioning', 'Wrecked'].includes(sensors?.effectiveCondition ?? sensors?.condition))
+        return 'Target System is a push action and requires functioning sensors.';
+    return '';
+}
+
+function systemTargetEnemies(ship) {
+    const range = ship.sensorRangeHexes || 0;
+    return state.ships.filter(target => target.teamId !== ship.teamId && !target.isDestroyed &&
+        !(ship.targetedSystems || []).some(lock => lock.targetShipId === target.id) &&
+        (!range || Hex.distance(ship, target) <= range * 5));
+}
+
+function canContinueSystemTargeting() {
+    const pending = pendingSystemTarget;
+    const actor = currentActor();
+    return pending && actor && state.phase === 'Helm' && !state.freeAttack && !state.isComplete &&
+        actor.id === pending.shipId && state.round === pending.round && !actor.isDisabled && !actor.isDestroyed &&
+        !targetSystemUnavailableReason(actor) && availableScienceOfficers(actor).some(c => c.index === pending.crewIndex);
+}
+
+function balanceSensorsWrecked(ship) {
+    const sensors = (ship.systems || []).find(s => s.system === 'Sensors');
+    return ['Wrecked'].includes(sensors?.effectiveCondition ?? sensors?.condition);
+}
+
+function maxShieldTransfer(ship, sourceQuadrant) {
+    const total = QUADRANTS.reduce((sum, q) => sum + Math.max(0, ship.shields[q.toLowerCase()] ?? 0), 0);
+    const minimum = Math.ceil(total / 10);
+    return Math.max(0, (ship.shields[sourceQuadrant.toLowerCase()] ?? 0) - minimum);
+}
+
+function canContinueShieldBalancing() {
+    const pending = pendingShieldBalance;
+    const actor = currentActor();
+    return pending && actor && state.phase === 'Helm' && !state.freeAttack && !state.isComplete &&
+        actor.id === pending.shipId && state.round === pending.round && !actor.isDisabled && !actor.isDestroyed &&
+        !actor.crew[pending.crewIndex]?.actionUsed && !balanceSensorsWrecked(actor);
+}
+
+function clearSystemTargeting() {
+    pendingSystemTarget = null;
+    if (systemTargetDialog.open) systemTargetDialog.close();
+    grid.setTargets([]);
+    grid.setSelectedGunneryTarget(null, null);
+}
+
+function clearShieldBalancing() {
+    pendingShieldBalance = null;
+    if (balanceDialog.open) balanceDialog.close();
+    grid.setSelectedGunneryTarget(null, null);
+}
+
+// ── Balance Shields ──
+const QUADRANTS = ['Forward', 'Starboard', 'Aft', 'Port'];
+
+// Update the Balance Shields button label with the selected officer's success chance.
+function updateChance() {
+    const actor = currentActor();
+    const crewSelect = document.getElementById('science-crew');
+    const button = document.getElementById('btn-balance-shields');
+    if (!actor || !crewSelect || !button) return;
+    const chance = actor.crew[Number(crewSelect.value)]?.scienceChances?.balance ?? null;
+    button.textContent = `Balance Shields${chance != null ? ` (${chance}%)` : ''}`;
+}
+
+function startShieldBalancing(crewIndex) {
+    const actor = currentActor();
+    if (!actor || state.phase !== 'Helm' || state.freeAttack || balanceSensorsWrecked(actor) ||
+        !availableScienceOfficers(actor).some(c => c.index === crewIndex)) return;
+    pendingShieldBalance = { shipId: actor.id, crewIndex, round: state.round, sourceQuadrant: null, destinationQuadrant: null, amount: 0, balanceEvenly: false, submitting: false, error: '' };
+    detailsShipId = null;
+    pinnedWeapon = null;
+    clearWeaponRange();
+    hideShipDetails();
+    renderHelm();
+}
+
+function shieldBalancePreview(ship) {
+    const pending = pendingShieldBalance;
+    const shields = { ...ship.shields };
+    if (pending.balanceEvenly) {
+        const total = QUADRANTS.reduce((sum, q) => sum + Math.max(0, ship.shields[q.toLowerCase()] ?? 0), 0);
+        const each = Math.floor(total / 4);
+        const remainder = total % 4;
+        QUADRANTS.forEach((q, i) => { shields[q.toLowerCase()] = each + (i === 0 ? remainder : 0); });
+    } else if (pending.sourceQuadrant && pending.destinationQuadrant) {
+        const src = pending.sourceQuadrant.toLowerCase();
+        const dst = pending.destinationQuadrant.toLowerCase();
+        const current = Math.max(0, ship.shields[src] ?? 0);
+        const amount = Math.min(current, Math.max(0, pending.amount));
+        shields[src] = current - amount;
+        shields[dst] = (ship.shields[dst] ?? 0) + amount;
+    }
+    return shields;
+}
+
+function renderShieldBalancing() {
+    if (!canContinueShieldBalancing()) { clearShieldBalancing(); renderHelm(); return; }
+    const actor = currentActor();
+    const pending = pendingShieldBalance;
+    const crew = actor.crew[pending.crewIndex];
+    const chance = crew?.scienceChances?.balance ?? null;
+    const preview = shieldBalancePreview(actor);
+    grid.setHighlights([]);
+    grid.setGhost(null);
+    grid.setPath(null);
+    grid.setRangeHexes([]);
+    grid.setTargets([]);
+    grid.setSelectedGunneryTarget(actor.id, actor.id);
+    actionPanel.innerHTML = `<div class="actor-name" style="color:${teamColor(actor.teamId)}">${reportEscape(actor.name)}</div>
+        <div class="detail-section">Balance Shields</div>
+        <div class="hint">Officer ${pending.crewIndex + 1} · Choose arcs in the dialog, then confirm.</div>`;
+    openBalanceDialog(actor, preview);
+}
+
+function openBalanceDialog(ship, preview) {
+    const pending = pendingShieldBalance;
+    const chance = ship.crew[pending.crewIndex]?.scienceChances?.balance ?? null;
+    const evenPreview = pending.balanceEvenly ? Object.fromEntries(QUADRANTS.map(q => [q.toLowerCase(), preview[q.toLowerCase()]])) : null;
+    const maxTransfer = pending.sourceQuadrant ? maxShieldTransfer(ship, pending.sourceQuadrant) : 0;
+    const hasTransfer = !pending.balanceEvenly && pending.sourceQuadrant && pending.destinationQuadrant && maxTransfer > 0;
+    balanceDialog.innerHTML = `<div class="sd-header"><span class="sd-name" id="balance-title">Balance Shields · ${reportEscape(ship.name)}</span><button class="btn btn-ghost sd-close" id="btn-close-balance" aria-label="Close balance dialog">×</button></div>
+        ${ShipSchematic.render(ship, { mode: 'balance', sourceQuadrant: pending.sourceQuadrant, destinationQuadrant: pending.destinationQuadrant, amount: pending.amount, balanceEvenly: pending.balanceEvenly, evenPreview })}
+        ${hasTransfer ? `<div class="balance-transfer-control"><label for="balance-amount">Shield points to move <input id="balance-amount" type="number" min="1" max="${maxTransfer}" value="${pending.amount}" ${pending.submitting ? 'disabled' : ''}></label><input id="balance-slider" type="range" min="1" max="${maxTransfer}" value="${pending.amount}" aria-label="Shield points to move" ${pending.submitting ? 'disabled' : ''}><div class="hint">Max ${maxTransfer} SP · Source minimum ${Math.ceil(QUADRANTS.reduce((sum, q) => sum + Math.max(0, ship.shields[q.toLowerCase()] ?? 0), 0) / 10)} SP</div></div>` : ''}
+        <div class="system-picker-actions balance-dialog-actions">
+            <button class="btn btn-primary" id="btn-confirm-balance" ${pending.submitting || (!pending.balanceEvenly && (!pending.sourceQuadrant || !pending.destinationQuadrant || pending.amount <= 0)) ? 'disabled' : ''}>${pending.submitting ? 'Attempting…' : `Confirm Balance${chance != null ? ` (${chance}%)` : ''}`}</button>
+            <button class="btn btn-ghost" id="btn-reset-balance" ${pending.submitting ? 'disabled' : ''}>Reset</button>
+        </div>
+        <div class="hint" id="balance-error" role="status">${reportEscape(pending.error)}</div>`;
+    document.getElementById('btn-confirm-balance').addEventListener('click', confirmShieldBalance);
+    document.getElementById('btn-reset-balance').addEventListener('click', () => {
+        pending.sourceQuadrant = null; pending.destinationQuadrant = null; pending.amount = 0; pending.balanceEvenly = false; pending.error = '';
+        renderShieldBalancing();
+    });
+    const setTransfer = value => {
+        pending.amount = Math.min(maxTransfer, Math.max(1, Number(value) || 1));
+        renderShieldBalancing();
+    };
+    document.getElementById('balance-amount')?.addEventListener('change', event => setTransfer(event.target.value));
+    document.getElementById('balance-slider')?.addEventListener('change', event => setTransfer(event.target.value));
+    ShipSchematic.bind(balanceDialog, ship, { mode: 'balance', sourceQuadrant: pending.sourceQuadrant, destinationQuadrant: pending.destinationQuadrant, amount: pending.amount, balanceEvenly: pending.balanceEvenly, evenPreview,
+        onArcSelect: arc => {
+            if (pending.submitting) return;
+            const a = arc.charAt(0).toUpperCase() + arc.slice(1);
+            pending.balanceEvenly = false;
+            if (a === pending.sourceQuadrant) {
+                pending.sourceQuadrant = null; pending.destinationQuadrant = null; pending.amount = 0;
+            } else if (!pending.sourceQuadrant || a === pending.destinationQuadrant) {
+                pending.sourceQuadrant = a; pending.destinationQuadrant = null; pending.amount = maxShieldTransfer(ship, a);
+            } else if (!pending.destinationQuadrant) {
+                pending.destinationQuadrant = a; pending.amount = maxShieldTransfer(ship, pending.sourceQuadrant);
+            } else {
+                pending.sourceQuadrant = a; pending.destinationQuadrant = null; pending.amount = maxShieldTransfer(ship, a);
+            }
+            pending.error = '';
+            renderShieldBalancing();
+        },
+        onBalanceEvenly: () => {
+            if (pending.submitting) return;
+            pending.balanceEvenly = true; pending.sourceQuadrant = null; pending.destinationQuadrant = null; pending.amount = 0; pending.error = '';
+            renderShieldBalancing();
+        } });
+    document.getElementById('btn-close-balance').addEventListener('click', () => { clearShieldBalancing(); renderHelm(); });
+    balanceDialog.oncancel = event => {
+        if (pendingShieldBalance?.submitting) { event.preventDefault(); return; }
+        clearShieldBalancing();
+        renderHelm();
+    };
+    if (!balanceDialog.open) balanceDialog.showModal();
+}
+
+async function confirmShieldBalance() {
+    if (!canContinueShieldBalancing() || pendingShieldBalance.submitting) return;
+    const pending = pendingShieldBalance;
+    const actor = currentActor();
+    if (!pending.balanceEvenly && (!pending.sourceQuadrant || !pending.destinationQuadrant || pending.amount <= 0)) return;
+    pending.submitting = true;
+    pending.error = '';
+    renderShieldBalancing();
+    try {
+        await api(`/${roomCode}/science`, pending.balanceEvenly
+            ? { shipId: pending.shipId, crewIndex: pending.crewIndex, action: 'Balance', balanceEvenly: true }
+            : { shipId: pending.shipId, crewIndex: pending.crewIndex, action: 'Balance', fromQuadrant: pending.sourceQuadrant, toQuadrant: pending.destinationQuadrant, amount: Math.max(0, pending.amount) });
+    } catch (err) {
+        pending.submitting = false;
+        pending.error = `Could not balance shields: ${err.message}`;
+        renderShieldBalancing();
+        return;
+    }
+    clearShieldBalancing();
+    try { await fetchState(); }
+    catch (err) { renderHelm(); addLog('error', `The action was submitted, but state could not refresh: ${err.message}`); }
+}
+
+function startSystemTargeting(crewIndex) {
+    const actor = currentActor();
+    if (!actor || state.phase !== 'Helm' || state.freeAttack || targetSystemUnavailableReason(actor) ||
+        !availableScienceOfficers(actor).some(c => c.index === crewIndex)) return;
+    pendingSystemTarget = { shipId: actor.id, crewIndex, round: state.round, targetShipId: null, system: null, submitting: false, error: '' };
+    detailsShipId = null;
+    pinnedWeapon = null;
+    clearWeaponRange();
+    hideShipDetails();
+    renderHelm();
+}
+
+function renderSystemTargeting() {
+    if (!canContinueSystemTargeting()) { clearSystemTargeting(); renderHelm(); return; }
+    const actor = currentActor();
+    const pending = pendingSystemTarget;
+    const officers = availableScienceOfficers(actor);
+    const enemies = systemTargetEnemies(actor);
+    const target = enemies.find(t => t.id === pending.targetShipId);
+    if (!target) { pending.targetShipId = null; pending.system = null; }
+    const chance = target ? actor.crew[pending.crewIndex].scienceChances.targets[target.id] : null;
+    grid.setHighlights([]);
+    grid.setGhost(null);
+    grid.setPath(null);
+    grid.setRangeHexes([]);
+    grid.setTargets(enemies.map(t => [t.id, actor.crew[pending.crewIndex].scienceChances.targets[t.id]]));
+    grid.setSelectedGunneryTarget(target ? actor.id : null, target?.id || null);
+    actionPanel.innerHTML = `<div class="actor-name" style="color:${teamColor(actor.teamId)}">${reportEscape(actor.name)}</div>
+        <div class="detail-section">Target System (Push)</div>
+        <div class="hint">Choose a highlighted enemy, select a system in its popup, then confirm there to roll.</div>
+        <div class="eng-row"><label for="target-science-crew">Science Officer</label><select id="target-science-crew" ${pending.submitting ? 'disabled' : ''}>${officers.map(c => `<option value="${c.index}" ${c.index === pending.crewIndex ? 'selected' : ''}>Officer ${c.index + 1} (${c.scienceBonus >= 0 ? '+' : ''}${c.scienceBonus})</option>`).join('')}</select></div>
+        <div class="hint">${target ? `${reportEscape(actor.name)} → ${reportEscape(target.name)} · ${systemTargetLabel(pending.system)}` : 'Click a highlighted enemy on the map, then choose its system.'}</div>
+        ${target ? `<div class="hint">${Hex.distance(actor, target)} hexes · ${chance}% success${pending.system === 'WeaponsArray' ? ' · Weapon arc is determined randomly if critical damage occurs.' : ''}</div>
+            <button class="btn btn-ghost" id="btn-change-target-system" ${pending.submitting ? 'disabled' : ''}>Change System</button>` : ''}
+        <div class="hint">${actor.sensorRangeHexes ? `Maximum sensor range: ${actor.sensorRangeHexes * 5} hexes.` : ''} ${enemies.length ? 'Click another highlighted enemy to change the target.' : 'No unlocked enemies in sensor range.'}</div>
+        <button class="btn btn-ghost" id="btn-cancel-target-system" ${pending.submitting ? 'disabled' : ''}>Cancel Targeting</button>
+        <div class="hint" id="target-system-error" role="status">${reportEscape(pending.error)}</div>`;
+    document.getElementById('target-science-crew').addEventListener('change', event => {
+        pending.crewIndex = Number(event.target.value);
+        pending.error = '';
+        renderSystemTargeting();
+    });
+    document.getElementById('btn-change-target-system')?.addEventListener('click', () => chooseSystemTarget(target));
+    document.getElementById('btn-cancel-target-system').addEventListener('click', () => { clearSystemTargeting(); renderHelm(); });
+}
+
+function chooseSystemTarget(ship) {
+    if (!pendingSystemTarget || pendingSystemTarget.submitting) return;
+    if (!canContinueSystemTargeting()) { clearSystemTargeting(); render(); return; }
+    if (!systemTargetEnemies(currentActor()).some(t => t.id === ship.id)) {
+        pendingSystemTarget.error = 'Choose an unlocked enemy within sensor range.';
+        renderSystemTargeting();
+        return;
+    }
+    const actor = currentActor();
+    let selection = pendingSystemTarget.targetShipId === ship.id ? pendingSystemTarget.system : null;
+    systemTargetDialog.innerHTML = `<div class="sd-header"><span class="sd-name" id="system-target-title">Choose a system · ${reportEscape(ship.name)}</span><button class="btn btn-ghost sd-close" id="btn-close-system-picker" aria-label="Close system picker">×</button></div>
+        ${ShipSchematic.render(ship, { mode: 'target', selectedSystem: selection })}
+        <div class="system-picker-actions"><button class="btn btn-primary" id="btn-confirm-system-target" ${selection ? '' : 'disabled'}>Confirm Target System${actor.crew[pendingSystemTarget.crewIndex]?.scienceChances?.targets[ship.id] != null ? ` (${actor.crew[pendingSystemTarget.crewIndex].scienceChances.targets[ship.id]}%)` : ''}</button><button class="btn btn-ghost" id="btn-cancel-system-picker">Cancel</button></div>
+        <div class="hint" id="system-target-error" role="status">${reportEscape(pendingSystemTarget.error)}</div>`;
+    ShipSchematic.bind(systemTargetDialog, ship, { mode: 'target', selectedSystem: selection, onSelect: system => {
+        selection = system;
+        document.getElementById('btn-confirm-system-target').disabled = false;
+    } });
+    document.getElementById('btn-close-system-picker').addEventListener('click', () => systemTargetDialog.close());
+    document.getElementById('btn-cancel-system-picker').addEventListener('click', () => systemTargetDialog.close());
+    document.getElementById('btn-confirm-system-target').addEventListener('click', () => {
+        if (!selection || !canContinueSystemTargeting()) { clearSystemTargeting(); render(); return; }
+        if (!systemTargetEnemies(currentActor()).some(t => t.id === ship.id)) {
+            systemTargetDialog.close();
+            pendingSystemTarget.error = 'That ship is no longer an available target.';
+            renderSystemTargeting();
+            return;
+        }
+        pendingSystemTarget.targetShipId = ship.id;
+        pendingSystemTarget.system = selection;
+        pendingSystemTarget.error = '';
+        confirmSystemTarget();
+    });
+    systemTargetDialog.oncancel = event => {
+        if (pendingSystemTarget?.submitting) event.preventDefault();
+    };
+    if (!systemTargetDialog.open) systemTargetDialog.showModal();
+}
+
+async function confirmSystemTarget() {
+    if (!canContinueSystemTargeting() || pendingSystemTarget.submitting) return;
+    const pending = pendingSystemTarget;
+    if (!pending.system || !systemTargetEnemies(currentActor()).some(t => t.id === pending.targetShipId)) return;
+    pending.submitting = true;
+    pending.error = '';
+    const confirmButton = document.getElementById('btn-confirm-system-target');
+    if (confirmButton) { confirmButton.disabled = true; confirmButton.textContent = 'Attempting…'; }
+    document.getElementById('btn-cancel-system-picker')?.setAttribute('disabled', '');
+    document.getElementById('btn-close-system-picker')?.setAttribute('disabled', '');
+    try {
+        await api(`/${roomCode}/science`, { shipId: pending.shipId, crewIndex: pending.crewIndex, action: 'Target System', targetShipId: pending.targetShipId, system: pending.system });
+    } catch (err) {
+        pending.submitting = false;
+        pending.error = `Could not target system: ${err.message}`;
+        if (confirmButton) { confirmButton.disabled = false; confirmButton.textContent = 'Retry Target System'; }
+        document.getElementById('btn-cancel-system-picker')?.removeAttribute('disabled');
+        document.getElementById('btn-close-system-picker')?.removeAttribute('disabled');
+        const error = document.getElementById('system-target-error');
+        if (error) error.textContent = pending.error;
+        return;
+    }
+    systemTargetDialog.close();
+    clearSystemTargeting();
+    try { await fetchState(); }
+    catch (err) { renderHelm(); addLog('error', `The action was submitted, but state could not refresh: ${err.message}`); }
+}
+
 // ── Helm ──
 function renderHelm() {
     const actor = currentActor();
     if (!actor) { grid.setHighlights([]); grid.setTargets([]); grid.setGhost(null); grid.setPath(null); actionPanel.innerHTML = ''; return; }
+    if (pendingSystemTarget) { renderSystemTargeting(); return; }
+    if (pendingShieldBalance) { renderShieldBalancing(); return; }
 
     if (state.freeAttack) {
         const attack = state.freeAttack;
@@ -487,6 +970,9 @@ function renderHelm() {
         return;
     }
 
+    // Restore a movement preview after leaving science targeting.
+    grid.setGhost(pendingMove ? { ...pendingMove.option.position, facing: pendingMove.option.finalFacing, teamId: actor.teamId, name: actor.name } : null);
+    grid.setPath(pendingMove?.option.path || null);
     // Highlight every reachable hex (union over facings).
     const moves = state.options?.items || [];
     grid.setHighlights(moves.filter(m => !m.requiresManeuver).map(m => m.position),
@@ -519,94 +1005,29 @@ function renderHelm() {
         actionPanel.innerHTML += ` <button class="btn btn-ghost" data-stunt="Flyby" title="Move up to full speed with normal turns through one enemy; avoid its free attack and fire one weapon arc at range 1 against any quadrant during Gunnery. Failure: normal movement, free attack and targeting.">Flyby</button>`;
     }
 
-    const scienceShips = state.ships.filter(ship => ship.id === actor.id && !ship.isDestroyed && !ship.isDisabled &&
-        ((ship.crew || []).some(crew => crew.role === 'Science Officer' && !crew.actionUsed) || (ship.targetedSystems || []).length > 0));
-    if (scienceShips.length) {
+    const officers = availableScienceOfficers(actor);
+    const locks = actor.targetedSystems || [];
+    if (officers.length || locks.length) {
+        const enemies = systemTargetEnemies(actor);
+        const unavailable = targetSystemUnavailableReason(actor);
+        const balanceUnavailable = balanceSensorsWrecked(actor);
         actionPanel.innerHTML += `<div class="detail-section">Science Officer Actions</div>
-            <div class="hint">Science actions use one available Science Officer's action. Target System locks remain until that ship hits the selected enemy.</div>
-            ${scienceShips.map(ship => {
-                const officers = ship.crew.map((crew, i) => ({ ...crew, i })).filter(crew => crew.role === 'Science Officer' && !crew.actionUsed);
-                const pending = ship.targetedSystems || [];
-                const pendingText = pending.length
-                    ? `<div class="hint">Targeted: ${pending.map(lock => `${state.ships.find(target => target.id === lock.targetShipId)?.name || 'Unknown ship'} — ${lock.system}`).join('; ')}</div>` : '';
-                const enemies = state.ships.filter(target => target.teamId !== ship.teamId && !target.isDestroyed);
-                const sensorRange = ship.sensorRangeHexes || 0;
-                const availableEnemies = enemies.filter(target => {
-                    const distance = Hex.distance({ q: ship.q, r: ship.r }, { q: target.q, r: target.r });
-                    return !pending.some(lock => lock.targetShipId === target.id) && (!sensorRange || distance <= sensorRange * 5);
-                });
-                const actionControls = officers.length ? `
-                    <div class="eng-row"><label>Science Officer</label><select id="science-crew-${ship.id}">${officers.map(c => `<option value="${c.i}">Officer ${c.i + 1} (${c.scienceBonus >= 0 ? '+' : ''}${c.scienceBonus})</option>`).join('')}</select></div>
-                    <div class="eng-row"><label>Action</label><select id="science-action-${ship.id}">
-                        <option value="Balance">Balance Shields</option>
-                        ${ship.hasSensors && availableEnemies.length ? '<option value="Target System">Target System (Push)</option>' : ''}
-                    </select></div>
-                    <div id="science-balance-${ship.id}">
-                        <div class="eng-row"><label>Distribution</label><select id="science-balance-mode-${ship.id}"><option value="shift">Move points between quadrants</option><option value="even">Distribute evenly</option></select></div>
-                        <div id="science-shift-${ship.id}">
-                            <div class="eng-row"><label>From</label><select id="science-from-${ship.id}">${['Forward','Starboard','Aft','Port'].map(q => `<option value="${q}">${q} (${ship.shields[q.toLowerCase()]})</option>`).join('')}</select></div>
-                            <div class="eng-row"><label>To</label><select id="science-to-${ship.id}">${['Forward','Starboard','Aft','Port'].map(q => `<option value="${q}">${q}</option>`).join('')}</select></div>
-                            <div class="eng-row"><label>Shield points</label><input type="number" id="science-amount-${ship.id}" min="1" value="1"></div>
-                        </div>
-                        <div class="hint">Transfers cannot reduce the source below ${Math.ceil((ship.shields.forward + ship.shields.starboard + ship.shields.aft + ship.shields.port) / 10)} SP. Even distribution requires this in every quadrant.</div>
-                    </div>
-                    <div id="science-target-${ship.id}" hidden>
-                        <div class="eng-row"><label>Enemy</label><select id="science-enemy-${ship.id}">${availableEnemies.map(target => {
-                            const distance = Hex.distance({ q: ship.q, r: ship.r }, { q: target.q, r: target.r });
-                            const rangePenalty = sensorRange ? -2 * Math.max(0, Math.ceil(distance / sensorRange) - 1) : 0;
-                            return `<option value="${target.id}">${target.name} — ${distance} hex${distance === 1 ? '' : 'es'}${rangePenalty ? `, sensor check ${rangePenalty}` : ''} (+${target.countermeasures} countermeasures)</option>`;
-                        }).join('')}</select></div>
-                        <div class="eng-row"><label>System</label><select id="science-system-${ship.id}"><option value="PowerCore">Core</option><option value="Engines">Engines</option><option value="LifeSupport">Life Support</option><option value="Sensors">Sensors</option><option value="WeaponsArray">Weapons</option></select></div>
-                        <div class="hint">${sensorRange ? `Sensor range: ${sensorRange}/${sensorRange * 5}` : ship.hasSensors ? 'Sensor range not specified.' : 'No sensors installed.'}</div>
-                    </div>
-                    <button class="btn btn-ghost" data-science-ship="${ship.id}">Attempt Science Action</button>
-                    <div class="hint" id="science-error-${ship.id}"></div>` : '<div class="hint">No Science Officer action available this round.</div>';
-                return `<div class="science-action-card">
-                    <div class="detail-section" style="color:${teamColor(ship.teamId)}">${ship.name} (Team ${ship.teamId + 1})</div>
-                    ${pendingText}
-                    ${actionControls}
-                </div>`;
-            }).join('')}`;
-
-        for (const ship of scienceShips) {
-            const actionSelect = document.getElementById(`science-action-${ship.id}`);
-            if (!actionSelect) continue;
-            const balancePanel = document.getElementById(`science-balance-${ship.id}`);
-            const targetPanel = document.getElementById(`science-target-${ship.id}`);
-            const modeSelect = document.getElementById(`science-balance-mode-${ship.id}`);
-            const shiftPanel = document.getElementById(`science-shift-${ship.id}`);
-            const crewSelect = document.getElementById(`science-crew-${ship.id}`);
-            const enemySelect = document.getElementById(`science-enemy-${ship.id}`);
-            const button = actionPanel.querySelector(`[data-science-ship="${ship.id}"]`);
-            const updateChance = () => {
-                const targetMode = actionSelect.value === 'Target System';
-                balancePanel.hidden = targetMode;
-                targetPanel.hidden = !targetMode;
-                const chances = ship.crew[Number(crewSelect.value)].scienceChances;
-                const chance = targetMode ? chances.targets[enemySelect.value] : chances.balance;
-                button.textContent = `Attempt Science Action (${chance}% success)`;
-            };
-            actionSelect.addEventListener('change', updateChance);
+            ${locks.length ? `<div class="hint">Targeted: ${locks.map(lock => `${reportEscape(state.ships.find(target => target.id === lock.targetShipId)?.name || 'Unknown ship')} — ${systemTargetLabel(lock.system)}`).join('; ')}</div>` : ''}
+            ${officers.length ? `
+                <div class="eng-row"><label for="science-crew">Science Officer</label><select id="science-crew">${officers.map(c => `<option value="${c.index}">Officer ${c.index + 1} (${c.scienceBonus >= 0 ? '+' : ''}${c.scienceBonus})</option>`).join('')}</select></div>
+                <div class="science-action-buttons">
+                    <button class="btn btn-ghost" id="btn-target-system" title="Choose an enemy and system on the map. Confirm in the popup to roll." ${unavailable || !enemies.length ? 'disabled' : ''}>Target System (Push)</button>
+                    ${balanceUnavailable ? '' : '<button class="btn btn-ghost" id="btn-balance-shields" title="Choose shield arcs and a transfer, then confirm in the ship diagram to roll.">Balance Shields</button>'}
+                </div>
+                ${unavailable ? `<div class="hint">${unavailable}</div>` : (!enemies.length ? '<div class="hint">No unlocked enemies in sensor range.</div>' : '')}
+                ${balanceUnavailable ? '<div class="hint">Wrecked sensors prohibit Balance Shields.</div>' : ''}
+                <div class="hint" id="science-error"></div>` : '<div class="hint">No Science Officer action available this round.</div>'}`;
+        if (officers.length) {
+            const crewSelect = document.getElementById('science-crew');
             crewSelect.addEventListener('change', updateChance);
-            enemySelect.addEventListener('change', updateChance);
+            document.getElementById('btn-target-system').addEventListener('click', () => startSystemTargeting(Number(crewSelect.value)));
+            document.getElementById('btn-balance-shields')?.addEventListener('click', () => startShieldBalancing(Number(crewSelect.value)));
             updateChance();
-            modeSelect.addEventListener('change', () => { shiftPanel.hidden = modeSelect.value === 'even'; });
-            actionPanel.querySelector(`[data-science-ship="${ship.id}"]`).addEventListener('click', async () => {
-                const action = actionSelect.value;
-                const payload = { shipId: ship.id, crewIndex: Number(document.getElementById(`science-crew-${ship.id}`).value), action,
-                    balanceEvenly: action === 'Balance' && modeSelect.value === 'even' };
-                if (action === 'Balance' && !payload.balanceEvenly) {
-                    payload.fromQuadrant = document.getElementById(`science-from-${ship.id}`).value;
-                    payload.toQuadrant = document.getElementById(`science-to-${ship.id}`).value;
-                    payload.amount = Number(document.getElementById(`science-amount-${ship.id}`).value);
-                }
-                if (action === 'Target System') {
-                    payload.targetShipId = document.getElementById(`science-enemy-${ship.id}`).value;
-                    payload.system = document.getElementById(`science-system-${ship.id}`).value;
-                }
-                try { await api(`/${roomCode}/science`, payload); await fetchState(); }
-                catch (err) { document.getElementById(`science-error-${ship.id}`).textContent = `Could not attempt action: ${err.message}`; }
-            });
         }
     }
 
@@ -825,7 +1246,9 @@ function renderGunnery() {
     if (activeWeapon === null || fired.has(activeWeapon) || !weapons.has(activeWeapon))
         activeWeapon = usableIndices[0] ?? null;
 
-    const chipIndices = new Set([...weapons.keys(), ...fired, ...(actor.weapons || []).map((w, i) => w.limitedFireUses > 0 && w.usesRemaining === 0 ? i : null).filter(i => i !== null)]);
+    const emptyAmmoIndices = (actor.weapons || []).map((weapon, index) =>
+        weapon.limitedFireUses > 0 && weapon.usesRemaining === 0 ? index : null).filter(index => index !== null);
+    const chipIndices = new Set([...weapons.keys(), ...fired, ...emptyAmmoIndices]);
     for (const widx of [...chipIndices]) {
         const weapon = actor.weapons?.[widx];
         if (weapon?.linkedCount > 1 && weapon.linkedGroup && actor.weapons.findIndex(w => w.linkedGroup === weapon.linkedGroup) !== widx)
@@ -840,7 +1263,10 @@ function renderGunnery() {
         const exhausted = w.limitedFireUses > 0 && w.usesRemaining === 0;
         const isFired = fired.has(widx);
         const broadArcTitle = w.broadArc ? 'Can also fire into adjacent arcs at −2.' : '';
-        return `<button class="weapon-chip${activeWeapon === widx ? ' active' : ''}${isFired ? ' fired' : ''}" data-weapon="${widx}" title="${isFired ? 'Already fired this round' : exhausted ? 'Out of ammunition' : broadArcTitle}" ${(exhausted || isFired) ? 'disabled' : ''}>${w.displayName || w.name}${arcLabel}${dmg}${ammo}${isFired ? ' · FIRED' : ''}</button>`;
+        const array = (actor.weaponArcs || []).find(a => a.arc === w.arc);
+        const wrecked = array?.effectiveCondition === 'Wrecked';
+        const condition = array?.condition && array.condition !== 'None' ? ` · ${array.condition}${array.condition !== array.effectiveCondition ? ` (held: ${array.effectiveCondition === 'None' ? 'Healthy' : array.effectiveCondition})` : ''}` : '';
+        return `<button class="weapon-chip${activeWeapon === widx ? ' active' : ''}${isFired ? ' fired' : ''}" data-weapon="${widx}" title="${isFired ? 'Already fired this round' : exhausted ? 'Out of ammunition' : wrecked ? 'This weapon array is wrecked' : broadArcTitle}" ${(exhausted || isFired || wrecked || !weapons.has(widx)) ? 'disabled' : ''}>${w.displayName || w.name}${arcLabel}${dmg}${ammo}${condition}${isFired ? ' · FIRED' : ''}</button>`;
     }).join('');
 
     actionPanel.innerHTML = `
@@ -863,11 +1289,11 @@ function renderGunnery() {
         // Highlight the targets reachable by the active weapon.
         if (activeWeapon !== null) {
             const opts = weapons.get(activeWeapon) || [];
-            grid.setTargets(opts.map(o => [o.targetShipId, o.hitChancePercent]));
+            grid.setTargets(opts.map(o => [o.targetShipId, o.arcHitChances?.[selectedTargetArcs.get(o.targetShipId)] ?? o.hitChancePercent]));
             const activeArcOption = opts.find(o => o.targetShipId === selectedShots.get(activeWeapon) && o.arcChoiceRequired);
             if (activeArcOption) {
                 const selected = selectedTargetArcs.get(activeArcOption.targetShipId);
-                arcChoiceEl.innerHTML = `<span class="hint">${activeArcOption.flyby ? 'Flyby: choose the firing arc for this turret.' : 'This target is on an arc boundary. Choose one firing arc for all attacks against it this round.'}</span><div class="weapon-chips">${activeArcOption.arcChoices.map(arc => `<button class="weapon-chip arc-choice${selected === arc ? ' active' : ''}" data-arc="${arc}" data-target="${activeArcOption.targetShipId}">${arc}</button>`).join('')}</div>`;
+                arcChoiceEl.innerHTML = `<span class="hint">${activeArcOption.flyby ? 'Flyby: choose the firing arc for this turret.' : 'This target is on an arc boundary. Choose one firing arc for all attacks against it this round.'}</span><div class="weapon-chips">${activeArcOption.arcChoices.map(arc => `<button class="weapon-chip arc-choice${selected === arc ? ' active' : ''}" data-arc="${arc}" data-target="${activeArcOption.targetShipId}">${arc}${activeArcOption.arcHitChances?.[arc] != null ? ` · ${activeArcOption.arcHitChances[arc]}%` : ''}</button>`).join('')}</div>`;
                 arcChoiceEl.querySelectorAll('[data-arc]').forEach(button => button.addEventListener('click', () => {
                     selectedTargetArcs.set(button.dataset.target, button.dataset.arc);
                     refresh();
@@ -1003,9 +1429,10 @@ function clearWeaponRange() {
 }
 
 function showShipDetails(ship) {
+    reportShipId = ship.id;
+    renderDamageReport();
     const shieldTotal = Object.values(ship.shields || {}).reduce((a, b) => a + b, 0);
     const shieldMax = ship.shieldCapacity ?? (ship.maxShield ?? 0) * 4;
-    const arcs = ['forward', 'starboard', 'aft', 'port'];
 
     // Reset the pin if it no longer refers to this ship.
     if (pinnedWeapon && pinnedWeapon.shipId !== ship.id) {
@@ -1022,14 +1449,6 @@ function showShipDetails(ship) {
             <span class="dw-meta">${formatArc(w.arc)}${w.broadArc ? ' + Broad Arc (−2 adjacent)' : ''} · range ${w.rangeIncrement ?? 5}/${w.maxRange ?? (w.rangeIncrement ?? 5) * 10} · ${w.damage}${w.type ? ` · ${w.type}` : ''}${w.limitedFireUses > 0 ? ` · ${w.usesRemaining}/${w.limitedFireUses} shots` : ''}</span>
         </div>`).join('');
 
-    const systemsHtml = (ship.damagedSystems || []).length
-        ? `<div class="detail-section">Damaged Systems</div><ul class="detail-list detail-list-damaged">${ship.damagedSystems.map(s => {
-            const effective = (ship.systems || []).find(x => x.system === s.system)?.effectiveCondition;
-            const effectiveLabel = effective === 'None' ? 'Healthy' : effective;
-            return `<li>${s.system} — ${s.condition}${effective && effective !== s.condition ? ` (held: ${effectiveLabel})` : ''}</li>`;
-        }).join('')}</ul>`
-        : '';
-
     const crewHtml = (ship.crew || []).map(crew => {
         const bonus = crew.roleBonus == null ? '' : ` ${crew.roleBonus >= 0 ? '+' : ''}${crew.roleBonus}`;
         return `<li>${crew.role}${bonus}</li>`;
@@ -1038,8 +1457,14 @@ function showShipDetails(ship) {
     shipDetailsEl.innerHTML = `
         <div class="sd-header" style="--team-color:${teamColor(ship.teamId)}">
             <span class="sd-name">${ship.name}</span>
-            <button class="btn btn-ghost sd-close" title="Close">×</button>
+            <div class="sd-actions">
+            <button class="btn btn-ghost damage-report-button" id="btn-damage-report" aria-controls="damage-report" aria-expanded="${damageReportOpen}">Damage Report</button>
+            <button class="btn btn-ghost sd-close" title="Close" aria-label="Close ship details">×</button>
+            </div>
         </div>
+        ${(ship.isDisabled || ship.isDestroyed) ? `<div class="ship-status">${ship.isDestroyed ? 'DESTROYED' : 'DISABLED'}</div>` : ''}
+        ${ShipSchematic.render(ship)}
+        <details class="ship-specifications" open><summary>Ship specifications & crew</summary>
         <div class="detail-grid">
             <div class="detail-stat"><span>Tier</span><b>${formatTier(ship.tier)}</b></div>
             <div class="detail-stat"><span>Size</span><b>${ship.size ?? '—'}</b></div>
@@ -1050,16 +1475,18 @@ function showShipDetails(ship) {
             <div class="detail-stat"><span>Speed</span><b>${ship.speed}</b></div>
             <div class="detail-stat"><span>Maneuver</span><b>${ship.maneuverability}</b></div>
         </div>
-        <div class="detail-section">Shield Arcs</div>
-        <div class="shield-arcs">${arcs.map(a => `
-            <div class="sa-row"><span>${a[0].toUpperCase() + a.slice(1)}</span><b>${ship.shields?.[a] ?? 0}</b></div>`).join('')}</div>
         <div class="detail-section">Weapons</div>
         ${weaponsHtml || '<div class="hint">No weapons.</div>'}
         <div class="detail-section">Crew</div>
-        ${crewHtml ? `<ul class="detail-list">${crewHtml}</ul>` : '<div class="hint">No crew recorded.</div>'}
-        ${systemsHtml}
-        ${(ship.isDisabled || ship.isDestroyed) ? `<div class="ship-status">${ship.isDestroyed ? 'DESTROYED' : 'DISABLED'}</div>` : ''}`;
+        ${crewHtml ? `<ul class="detail-list detail-crew">${crewHtml}</ul>` : '<div class="hint">No crew recorded.</div>'}
+        </details>`;
 
+    ShipSchematic.bind(shipDetailsEl, ship);
+
+    shipDetailsEl.querySelector('#btn-damage-report').addEventListener('click', () => {
+        damageReportOpen = !damageReportOpen;
+        renderDamageReport();
+    });
     shipDetailsEl.classList.remove('hidden');
     shipDetailsEl.querySelector('.sd-close').addEventListener('click', () => {
         detailsShipId = null;
@@ -1107,6 +1534,26 @@ function hideShipDetails() {
     renderRoster();
 }
 
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && systemTargetDialog.open) return;
+    if (event.key === 'Escape' && balanceDialog.open) return;
+    if (event.key === 'Escape' && divertDialog.open) return;
+    if (event.key === 'Escape' && pendingSystemTarget && !pendingSystemTarget.submitting) {
+        event.preventDefault();
+        clearSystemTargeting();
+        renderHelm();
+        return;
+    }
+    if (event.key === 'Escape' && pendingShieldBalance && !pendingShieldBalance.submitting) {
+        event.preventDefault();
+        clearShieldBalancing();
+        renderHelm();
+        return;
+    }
+    if (event.key !== 'Escape' || shipDetailsEl.classList.contains('hidden') || damageReportOpen) return;
+    shipDetailsEl.querySelector('.sd-close')?.click();
+});
+
 // ────────────────────────────────────────────────
 //  Hover tooltip
 // ────────────────────────────────────────────────
@@ -1125,7 +1572,15 @@ grid.onShipHover = (ship, x, y) => {
 // ────────────────────────────────────────────────
 
 grid.onShipClick = (ship) => {
-    if (!state || state.isComplete) return;
+    if (!state) return;
+    if (pendingSystemTarget) {
+        chooseSystemTarget(state.ships.find(s => s.id === ship.id) || ship);
+        return;
+    }
+    detailsShipId = ship.id;
+    const selected = state.ships.find(s => s.id === ship.id);
+    if (selected) showShipDetails(selected);
+    if (state.isComplete) return;
     if (state.freeAttack) return;
 
     // During Helm, clicking your own ship offers the Turn In Place stunt.
@@ -1175,10 +1630,6 @@ grid.onShipClick = (ship) => {
         return;
     }
 
-    // Otherwise: show details.
-    detailsShipId = ship.id;
-    const full = state.ships.find(s => s.id === ship.id);
-    if (full) showShipDetails(full);
 };
 
 // ────────────────────────────────────────────────
@@ -1187,6 +1638,7 @@ grid.onShipClick = (ship) => {
 
 grid.onHexClick = (q, r) => {
     if (!state || state.isComplete) return;
+    if (pendingSystemTarget) return;
     if (state.freeAttack) return;
 
     if (state.phase === 'Helm') {
@@ -1296,3 +1748,88 @@ function addLog(phase, message) {
         });
     }
 })();
+
+
+// Frozen received outcomes; opening/closing this window never changes ship selection.
+function reportEscape(value) {
+    return String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function reportLabel(value) {
+    return value === 'None' ? 'Healthy' : String(value).replace(/([a-z])([A-Z])/g, '$1 $2');
+}
+
+function renderDamageReport() {
+    shipDetailsEl.querySelector('#btn-damage-report')?.setAttribute('aria-expanded', String(damageReportOpen));
+    damageReportEl.classList.toggle('hidden', !damageReportOpen);
+    if (!damageReportOpen) return;
+    const ship = state?.ships.find(s => s.id === (detailsShipId || reportShipId));
+    const events = ship?.damageReport || [];
+    const hits = events.filter(e => !e.shotDown);
+    const changedRows = [];
+    const changeRow = (label, before, after, loss = null) =>
+        `<tr><td>${reportEscape(label)}</td><td>${reportEscape(before)} → ${reportEscape(after)}${loss ? ` <strong>(−${loss})</strong>` : ''}</td></tr>`;
+    // Split a resource's summary when a repair/reallocation occurred between hits.
+    // Each arrow then describes damage only, even across Engineering and Helm.
+    function resourceRows(label, affected, value, loss = null) {
+        let group = [];
+        function flush() {
+            if (!group.length) return;
+            changedRows.push(changeRow(label, reportLabel(value(group[0].before)),
+                reportLabel(value(group[group.length - 1].after)), loss ? group.reduce((sum, e) => sum + loss(e), 0) : null));
+        }
+        for (const e of affected) {
+            if (group.length && value(group[group.length - 1].after) !== value(e.before)) {
+                flush();
+                group = [];
+            }
+            group.push(e);
+        }
+        flush();
+    }
+    for (const arc of ['Forward', 'Starboard', 'Aft', 'Port']) {
+        resourceRows(`${arc} shields`, hits.filter(e => e.shieldDamage > 0 && e.quadrant === arc),
+            snapshot => snapshot.shields[arc], e => e.shieldDamage);
+    }
+    resourceRows('Hull', hits.filter(e => e.hullDamage > 0), snapshot => snapshot.hull, e => e.hullDamage);
+    for (const system of ['LifeSupport', 'Sensors', 'Engines', 'PowerCore']) {
+        resourceRows(reportLabel(system), hits.filter(e => e.before.systems[system] !== e.after.systems[system]),
+            snapshot => snapshot.systems[system]);
+    }
+    for (const arc of ['Forward', 'Starboard', 'Aft', 'Port']) {
+        resourceRows(`${arc} weapons`, hits.filter(e => (e.before.weaponArcs?.[arc] ?? 'None') !== (e.after.weaponArcs?.[arc] ?? 'None')),
+            snapshot => snapshot.weaponArcs?.[arc] ?? 'None');
+    }
+    const status = snapshot => snapshot.isDestroyed ? 'Destroyed' : snapshot.isDisabled ? 'Disabled' : 'Operational';
+    const statusHits = hits.filter(e => status(e.before) !== status(e.after));
+    if (statusHits.length) changedRows.push(changeRow('Status', status(statusHits[0].before), status(statusHits[statusHits.length - 1].after)));
+    const eventRows = events.map(e => {
+        const effects = [];
+        if (e.shotDown) effects.push(`Shot down · ${e.defenseWeaponArc ? `${formatArc(e.defenseWeaponArc)} ` : ''}${e.defenseWeapon}`);
+        else {
+            if (e.shieldDamage) effects.push(`${e.quadrant} shields −${e.shieldDamage}`);
+            if (e.hullDamage) effects.push(`Hull −${e.hullDamage}`);
+            if (e.stoppedDamage) effects.push(`DT stopped ${e.stoppedDamage}`);
+            for (const crit of e.criticalEffects || []) effects.push(crit.system
+                ? `${reportLabel(crit.system)}${crit.weaponArc ? ` (${crit.weaponArc})` : ''} → ${reportLabel(crit.condition)}` : 'Crew injury · manual resolution');
+            if (status(e.before) !== status(e.after)) effects.push(status(e.after));
+            if (!effects.length) effects.push('No damage');
+        }
+        return `<li class="damage-event"><div>${reportEscape(e.attackerName)} · ${reportEscape(e.weapon)}</div>
+            <div class="damage-event-effects">${effects.map(reportEscape).join(' · ')}</div></li>`;
+    }).join('');
+    const period = state?.damageReportRound != null ? ` · Since R${state.damageReportRound} Gunnery`
+        : events.length ? ` · R${events[0].round} ${events[0].phase}` : '';
+    damageReportEl.innerHTML = `
+        <div class="sd-header" style="--team-color:${teamColor(ship?.teamId ?? 0)}">
+            <span class="sd-name">${reportEscape(ship?.name || 'Select a ship')}</span>
+            <button class="btn btn-ghost sd-close" aria-label="Close damage report">×</button>
+        </div>
+        <div class="detail-section">Damage Report${period}</div>
+        ${changedRows.length ? `<table class="damage-changes"><thead><tr><th>Change</th><th>Before → After</th></tr></thead><tbody>${changedRows.join('')}</tbody></table>` : ''}
+        ${eventRows ? `<ol class="damage-events">${eventRows}</ol>` : '<div class="hint">No damage recorded.</div>'}`;
+    damageReportEl.querySelector('.sd-close').addEventListener('click', () => {
+        damageReportOpen = false;
+        renderDamageReport();
+    });
+}

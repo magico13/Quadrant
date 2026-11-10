@@ -30,6 +30,10 @@ public class TrackingProjectileTests
         Assert.Equal(2, damageEvents.Count);
         Assert.Contains(missileFirst ? "Torpedo" : "Cannon", damageEvents[0].Message);
         Assert.Contains(missileFirst ? "Cannon" : "Torpedo", damageEvents[1].Message);
+        var report = state.GetShip("target")!.DamageReport;
+        Assert.Equal(2, report.Count);
+        Assert.Contains(missileFirst ? "Torpedo" : "Cannon", report[0].Weapon);
+        Assert.Contains(missileFirst ? "Cannon" : "Torpedo", report[1].Weapon);
     }
 
     [Fact]

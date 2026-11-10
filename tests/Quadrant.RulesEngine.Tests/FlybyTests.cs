@@ -25,6 +25,81 @@ public class FlybyTests
         return (new CombatEngine(state, new FixedDice(roll)), state, ship, enemy);
     }
 
+    [Fact]
+    public void FreeAttackKeepsIntactArraysAvailableWhenAnotherArrayIsWrecked()
+    {
+        var (engine, _, _, enemy) = Create(17);
+        for (int i = 0; i < 3; i++) enemy.Systems.ApplyWeaponCritical(FiringArc.Port);
+        Assert.True(engine.StartStunt("Flyby").IsValid);
+        Assert.True(engine.TryMoveTo(new Hex(4, 0), Facing.East).IsValid);
+        Assert.True(engine.HasPendingFreeAttack);
+        Assert.DoesNotContain(0, engine.GetFreeAttackWeapons());
+        Assert.Contains(1, engine.GetFreeAttackWeapons());
+        Assert.Contains(2, engine.GetFreeAttackWeapons());
+        Assert.Null(engine.ResolveFreeAttack(1));
+    }
+
+    [Fact]
+    public void FlybyTurretUsesItsChosenArrayCondition()
+    {
+        var (engine, _, ship, _) = Create(18);
+        ship.Systems.ApplyWeaponCritical(FiringArc.Port);
+        ship.Systems.ApplyWeaponCritical(FiringArc.Port);
+        Assert.True(engine.StartStunt("Flyby").IsValid);
+        Assert.True(engine.TryMoveTo(new Hex(4, 0), Facing.East).IsValid);
+        engine.SkipMove();
+        var check = engine.ApplyFire(new FireAction(2, "b", Quadrant.Aft), FiringArc.Port);
+        Assert.NotNull(check);
+        Assert.Equal(ship.CrewBonus(1, "gunnery", "Gunner") - 4, check.Modifier);
+    }
+
+    [Fact]
+    public void HelmFreeAttackAddsReceivedDamageToExistingReportPeriod()
+    {
+        var (engine, state, ship, _) = Create(17);
+        Assert.True(engine.StartStunt("Flyby").IsValid);
+        Assert.True(engine.TryMoveTo(new Hex(4, 0), Facing.East).IsValid);
+        Assert.True(engine.HasPendingFreeAttack);
+        Assert.Null(engine.ResolveFreeAttack(2));
+        var damage = Assert.Single(ship.DamageReport);
+        Assert.Equal(CombatPhase.Helm, damage.Phase);
+        Assert.Equal("b", damage.AttackerId);
+        Assert.Equal(Quadrant.Aft, damage.Quadrant);
+        Assert.Equal(10, damage.Before.Shields[Quadrant.Aft]);
+        Assert.Equal(7, damage.After.Shields[Quadrant.Aft]);
+        Assert.Equal(CombatPhase.Helm, state.Phase);
+        engine.SkipMove();
+        Assert.Empty(ship.DamageReport);
+    }
+
+    [Fact]
+    public void DivertWeaponsAppliesToHelmFreeAttackDamage()
+    {
+        var weapon = new Weapon { Name = "Cannon", Arc = FiringArc.Aft, Type = WeaponType.DirectFire,
+            Damage = DamageExpression.From("1d6") };
+        var definition = new ShipDefinition { Id = "ship", Name = "Ship", Tier = 1, Speed = 6, HullPoints = 100,
+            Shields = new QuadrantShields(), Weapons = [weapon],
+            Crew = [new CrewDefinition("Engineer", new Dictionary<string, int> { ["engineering"] = 20 }),
+                new CrewDefinition("Pilot", new Dictionary<string, int> { ["piloting"] = 0 }),
+                new CrewDefinition("Gunner", new Dictionary<string, int> { ["gunnery"] = 100 })] };
+        var attacker = definition.Instantiate("a", new Hex(0, 0), Facing.East, 0);
+        var defender = (definition with { Id = "b", Name = "Defender", Tier = 2 }).Instantiate("b", new Hex(2, 0), Facing.West, 1);
+        attacker.Shields.Forward = attacker.Shields.Starboard = attacker.Shields.Aft = attacker.Shields.Port = 0;
+        defender.Shields.Forward = defender.Shields.Starboard = defender.Shields.Aft = defender.Shields.Port = 0;
+        var state = new GameState { GameId = "test", RoomCode = "test", Phase = CombatPhase.Engineering, ActionOrder = ["a", "b"] };
+        state.Ships.AddRange([attacker, defender]);
+        var engine = new CombatEngine(state, new FixedDice(17));
+
+        Assert.Null(engine.ApplyEngineering(new EngineerAction("b", 0, "Divert", "Weapons", null)));
+        state.Phase = CombatPhase.Helm;
+        Assert.True(engine.StartStunt("Flyby").IsValid);
+        Assert.True(engine.TryMoveTo(new Hex(4, 0), Facing.East).IsValid);
+        Assert.True(engine.HasPendingFreeAttack);
+        Assert.Null(engine.ResolveFreeAttack(0));
+
+        Assert.Equal(2, Assert.Single(attacker.DamageReport).RawDamage);
+    }
+
     [Theory]
     [InlineData(18, true)]
     [InlineData(17, false)]
