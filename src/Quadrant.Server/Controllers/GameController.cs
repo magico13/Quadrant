@@ -82,7 +82,9 @@ public class GameController : ControllerBase
         if (state.Phase == CombatPhase.Helm && state.CurrentActor is not null && !engine.HasPendingFreeAttack)
             options = new { type = "moves", items = engine.GetMovementPreviews().Select(m => new { position = new { q = m.Position.Q, r = m.Position.R }, finalFacing = (int)m.FinalFacing, requiresManeuver = m.RequiresManeuver, path = m.Path.Select(h => new { q = h.Position.Q, r = h.Position.R }).ToList() }) };
         else if (state.Phase == CombatPhase.Gunnery && state.CurrentActor is not null)
-            options = new { type = "targets", items = engine.GetValidTargets() };
+            options = new { type = "targets", items = engine.GetValidTargets(),
+                gunners = engine.GetGunneryChoices().Select(choice => new { choice.CrewIndex, choice.FireAtWill, choice.SnapShot,
+                    choice.Shots, choice.Bonus, targets = engine.GetValidTargets(choice.CrewIndex, choice.FireAtWill) }) };
 
         var projectileViews = engine.GetProjectilePreviews().Select(preview =>
         {
@@ -205,7 +207,7 @@ public class GameController : ControllerBase
                         ? s.AvailableGlideCrew() >= 0 ? "Glide" : "None" : "Pilot",
                 canTurnInPlace = engine.CanTurnInPlace(s),
                 stuntChances = new { backOff = engine.GetStuntSuccessChance(s, "Back Off"), flipAndBurn = engine.GetStuntSuccessChance(s, "Flip and Burn"), evade = engine.GetStuntSuccessChance(s, "Evade"), slide = engine.GetStuntSuccessChance(s, "Slide"), barrelRoll = engine.GetStuntSuccessChance(s, "Barrel Roll") },
-                gunneryAction = s.Definition.Crew.Count == 0 || s.AvailableGunner() >= 0 ? "Gunner" : !s.GunnerActionTaken && s.AvailableMinorCrew() >= 0 ? "Snap Shot" : "None",
+                gunneryAction = s.Definition.Crew.Count == 0 || s.AvailableGunner() >= 0 || s.FireAtWillShots.Count > 0 ? "Gunner" : !s.GunnerActionTaken && s.AvailableMinorCrew() >= 0 ? "Snap Shot" : "None",
                 crewShotsRemaining = s.RemainingGunneryActions(),
                 weapons = s.Weapons.Select((w, i) =>
                 {
@@ -221,6 +223,7 @@ public class GameController : ControllerBase
                         rangeIncrement = w.RangeIncrement,
                         maxRange = w.MaxFireRange,
                         damage = CombinedDamage(w.Damage, linkedCount).ToString(),
+                        averageDamage = CombinedDamage(w.Damage, linkedCount).Average(s.DivertWeapons),
                         type = w.Type,
                         projectileSpeed = w.ProjectileSpeed,
                         limitedFireUses = w.LimitedFireUses,
@@ -371,10 +374,21 @@ public class GameController : ControllerBase
         var session = _sessions.Get(roomCode);
         if (session is null) return NotFound(new { error = "Game not found." });
 
-        var result = session.Engine.ApplyFire(new FireAction(req.WeaponIndex, req.TargetShipId, req.TargetQuadrant), req.Arc is null ? null : Enum.Parse<FiringArc>(req.Arc, true));
+        var result = session.Engine.ApplyFire(new FireAction(req.WeaponIndex, req.TargetShipId, req.TargetQuadrant), req.Arc is null ? null : Enum.Parse<FiringArc>(req.Arc, true), req.CrewIndex, req.FireAtWill);
         if (result is not null)
             AdvanceUnavailableGunneryTurns(session.Engine);
         return Ok(new { ok = result is not null, result = result?.Description });
+    }
+
+    [HttpPost("{roomCode}/fire-at-will")]
+    public IActionResult FireAtWill(string roomCode, [FromBody] FireAtWillRequest req)
+    {
+        var session = _sessions.Get(roomCode);
+        if (session is null) return NotFound(new { error = "Game not found." });
+        var error = session.Engine.ActivateFireAtWill(req.CrewIndex);
+        if (error is not null) return BadRequest(new { error });
+        AdvanceUnavailableGunneryTurns(session.Engine);
+        return Ok(new { ok = true });
     }
 
     /// <summary>Gunnery: finish the current ship's firing choices.</summary>
@@ -420,6 +434,7 @@ public class GameController : ControllerBase
         if (weapon.Type != WeaponType.DirectFire || string.IsNullOrWhiteSpace(weapon.LinkedGroup)) return 1;
         int count = weapons.Count(candidate => candidate.Type == WeaponType.DirectFire &&
             candidate.LinkedGroup == weapon.LinkedGroup && candidate.Arc == weapon.Arc &&
+            candidate.BroadArc == weapon.BroadArc &&
             candidate.Name == weapon.Name && candidate.Damage == weapon.Damage &&
             candidate.MinRange == weapon.MinRange && candidate.RangeIncrement == weapon.RangeIncrement &&
             candidate.LimitedFireUses == weapon.LimitedFireUses);
@@ -439,7 +454,8 @@ public sealed record MoveRequest(int Q, int R, int Facing);
 public sealed record StuntRequest(string Stunt);
 public sealed record FreeAttackRequest(int? WeaponIndex, int? GunnerIndex);
 public sealed record TurnInPlaceRequest(int Facing);
-public sealed record FireShotRequest(int WeaponIndex, string TargetShipId, string? Arc = null, Quadrant.RulesEngine.Quadrant? TargetQuadrant = null);
+public sealed record FireShotRequest(int WeaponIndex, string TargetShipId, string? Arc = null, Quadrant.RulesEngine.Quadrant? TargetQuadrant = null, int? CrewIndex = null, bool FireAtWill = false);
+public sealed record FireAtWillRequest(int CrewIndex);
 public sealed record PointDefenseRequest(string ProjectileId, bool Attempt);
 public sealed record RoleAssignmentsRequest(List<ShipRolesRequest> Ships);
 public sealed record ShipRolesRequest(string ShipId, List<string> Roles);

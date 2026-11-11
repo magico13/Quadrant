@@ -225,7 +225,7 @@ const ShipSchematic = (() => {
                 ${mounts}
             </div>
             <div class="schematic-legend"><span>● Healthy</span><span class="condition-glitching">● Glitching</span><span class="condition-malfunctioning">● Malfunctioning</span><span class="condition-wrecked">● Wrecked</span></div>
-            <div class="schematic-effect" aria-live="polite"></div>
+            ${patching ? `<div class="schematic-patch-effect"><div class="schematic-effect" aria-live="polite"></div><div class="schematic-patch-controls">${options.patchFast?.available ? `<label class="patch-fast-option"><input type="checkbox" id="patch-fast" ${options.patchFast.checked ? 'checked' : ''} ${options.patchFast.disabled ? 'disabled' : ''}> Fast</label>` : ''}</div></div>` : '<div class="schematic-effect" aria-live="polite"></div>'}
             ${ship.barrelRollActive ? '<div class="schematic-hint">Barrel Roll active: port and starboard shields and weapon arcs are swapped.</div>' : ''}
             <div class="hint schematic-hint">${holding ? 'Select a damaged system or weapon arc.' : patching ? 'Select a damaged system or weapon arc.' : targeting ? 'Choose a system. Any weapon component selects Weapons; the affected arc is determined randomly.' : balancing ? 'Select a source and destination shield arc. Adjust the transfer in the sidebar.' : 'Hover, focus or click a component for its effects. Weapon damage is tracked by arc; turrets use their firing arc.'}</div>
         </div>`;

@@ -46,6 +46,7 @@ let roomCode = null;
 let state = null;          // last fetched game state
 let selectedShots = new Map(); // gunnery: weaponIndex → targetShipId (one target per weapon instance)
 let activeWeapon = null;   // currently selected weapon in gunnery targeting
+let selectedGunneryKey = null; // Selected gunner and action for the next shot.
 let selectedTargetArcs = new Map();
 let detailsShipId = null;  // ship currently shown in the details panel
 let lastActiveShipId = null;
@@ -318,7 +319,7 @@ grid.onShipClick = (ship) => {
 
     // During Gunnery, clicking an enemy retargets a weapon at it.
     if (state.phase === 'Gunnery') {
-        const options = state.options?.items || [];
+        const options = currentGunneryOptions();
         if (activeWeapon !== null) {
             // Specific weapon selected — use it if it can reach this target.
             const opt = options.find(o => o.weaponIndex === activeWeapon && o.targetShipId === ship.id);
@@ -346,7 +347,7 @@ grid.onShipClick = (ship) => {
                 const best = legal.reduce((a, b) => a.range < b.range ? a : b);
                 assignGunneryTarget(best.weaponIndex, ship.id);
                 activeWeapon = best.weaponIndex;
-                actionPanel.querySelectorAll('.weapon-chip').forEach(c =>
+                actionPanel.querySelectorAll('.weapon-chip[data-weapon]').forEach(c =>
                     c.classList.toggle('active', parseInt(c.dataset.weapon, 10) === activeWeapon));
                 refreshGunnery?.();
             }

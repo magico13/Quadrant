@@ -63,6 +63,10 @@ public sealed record DamageExpression(int DiceCount, int Sides, int FlatBonus, i
     /// <summary>Maximum possible roll (all maxes).</summary>
     public int Max => (DiceCount * Sides * Multiplier) + FlatBonus;
 
+    /// <summary>Expected damage, including the Divert Weapons effect when active.</summary>
+    public double Average(bool divertWeapons = false) =>
+        DiceCount * ((Sides + 1) / 2.0 + (divertWeapons && Sides > 0 ? 1.0 / Sides : 0)) * Multiplier + FlatBonus;
+
     public override string ToString()
     {
         if (DiceCount == 0) return FlatBonus.ToString();

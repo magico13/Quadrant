@@ -420,10 +420,11 @@ select option { background: var(--panel); color: var(--text); }
 #system-target-dialog::backdrop { background: #050b1459; }
 .system-picker-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; }
 .system-picker-actions .btn { min-width: 118px; }
-.patch-fast-option { display: flex; justify-content: center; align-items: center; gap: 7px; margin-top: 10px; cursor: pointer; }
+.schematic-patch-effect { display: flex; align-items: stretch; background: #030d1855; }
+.schematic-patch-effect .schematic-effect { flex: 1; min-width: 0; background: transparent; }
+.schematic-patch-controls { flex: 0 0 72px; display: flex; align-items: center; justify-content: center; }
+.patch-fast-option { display: flex; align-items: center; gap: 7px; cursor: pointer; }
 .patch-fast-option input { accent-color: var(--accent); }
-.patch-preview, .patch-chance { text-align: center; margin-top: 8px; }
-.patch-chance { font-weight: 600; color: var(--text-bright); }
 #system-target-dialog .schematic-effect { min-height: 92px; box-sizing: border-box; }
 
 #balance-dialog {

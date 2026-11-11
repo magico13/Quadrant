@@ -2,6 +2,15 @@
 // Classic page script; shares the game client global scope.
 
 // ── Gunnery ──
+function gunneryChoiceKey(choice) {
+    return `${choice.crewIndex ?? 'ship'}:${choice.fireAtWill ? 'fire-at-will' : choice.snapShot ? 'snap' : 'shoot'}`;
+}
+
+function currentGunneryOptions() {
+    const choice = (state?.options?.gunners || []).find(gunner => gunneryChoiceKey(gunner) === selectedGunneryKey);
+    return choice?.targets || state?.options?.items || [];
+}
+
 function renderGunnery() {
     const actor = currentActor();
     if (!actor) { grid.setHighlights([]); grid.setTargets([]); actionPanel.innerHTML = ''; return; }
@@ -19,15 +28,23 @@ function renderGunnery() {
         selectedShots.clear();
         selectedTargetArcs.clear();
         activeWeapon = null;
+        selectedGunneryKey = null;
     }
     if (renderGunnery.round !== state.round) {
         selectedShots.clear();
         selectedTargetArcs.clear();
         activeWeapon = null;
+        selectedGunneryKey = null;
         renderGunnery.round = state.round;
     }
 
-    const options = state.options?.items || [];
+    const gunners = state.options?.gunners || [];
+    if (!gunners.some(gunner => gunneryChoiceKey(gunner) === selectedGunneryKey)) {
+        const best = gunners.find(gunner => gunner.targets?.length) || gunners[0];
+        selectedGunneryKey = best ? gunneryChoiceKey(best) : null;
+    }
+    const gunner = gunners.find(candidate => gunneryChoiceKey(candidate) === selectedGunneryKey);
+    const options = gunner?.targets || [];
 
     // Group valid targets by weapon index so each instance gets its own chip.
     const weapons = new Map(); // weaponIndex → [options]
@@ -42,34 +59,20 @@ function renderGunnery() {
         if (!fired.has(widx) && !(weapons.get(widx) || []).some(o => o.targetShipId === target))
             selectedShots.delete(widx);
     }
-    for (const [widx, opts] of weapons) {
-        if (!opts.length) continue;
-        if (selectedShots.has(widx)) continue;
-        if ([...selectedShots.keys()].filter(i => !fired.has(i)).length >= actor.crewShotsRemaining) break;
-        const eligible = opts.filter(o => !o.arcChoiceRequired || !selectedTargetArcs.has(o.targetShipId) ||
-            o.arc === 'AllArcs' || o.broadArc || o.arc === selectedTargetArcs.get(o.targetShipId));
-        if (!eligible.length) continue;
-        const closest = eligible.reduce((best, o) => o.range < best.range ? o : best);
-        selectedShots.set(widx, closest.targetShipId);
-    }
-
-    const usableIndices = [...weapons.keys()].filter(i => !fired.has(i));
+    const compareWeapons = (a, b) => (actor.weapons?.[b]?.averageDamage ?? 0) - (actor.weapons?.[a]?.averageDamage ?? 0) || a - b;
+    const usableIndices = [...weapons.keys()].filter(i => !fired.has(i)).sort(compareWeapons);
     if (activeWeapon === null || fired.has(activeWeapon) || !weapons.has(activeWeapon))
         activeWeapon = usableIndices[0] ?? null;
-
-    const emptyAmmoIndices = (actor.weapons || []).map((weapon, index) =>
-        weapon.limitedFireUses > 0 && weapon.usesRemaining === 0 ? index : null).filter(index => index !== null);
-    const chipIndices = new Set([...weapons.keys(), ...fired, ...emptyAmmoIndices]);
-    for (const widx of [...chipIndices]) {
-        const weapon = actor.weapons?.[widx];
-        if (weapon?.linkedCount > 1 && weapon.linkedGroup && actor.weapons.findIndex(w => w.linkedGroup === weapon.linkedGroup) !== widx)
-            chipIndices.delete(widx);
+    if (activeWeapon !== null && !selectedShots.has(activeWeapon)) {
+        const opts = weapons.get(activeWeapon) || [];
+        if (opts.length) assignGunneryTarget(activeWeapon, opts.reduce((best, o) => o.range < best.range ? o : best).targetShipId);
     }
-    const chips = [...chipIndices].sort((a, b) => a - b).map(widx => {
+
+    const chips = usableIndices.map(widx => {
         const w = actor.weapons?.[widx];
         if (!w) return '';
         const arcLabel = w.arc && w.arc !== 'AllArcs' ? ` (${w.arc}${w.broadArc ? ' + Broad Arc' : ''})` : '';
-        const dmg = ` · ${w.damage}`;
+        const dmg = ` · ${w.damage} · avg ${Number(w.averageDamage ?? 0).toFixed(1).replace(/\.0$/, '')}`;
         const ammo = w.limitedFireUses > 0 ? ` · ${w.usesRemaining}/${w.limitedFireUses}` : '';
         const exhausted = w.limitedFireUses > 0 && w.usesRemaining === 0;
         const isFired = fired.has(widx);
@@ -82,10 +85,11 @@ function renderGunnery() {
 
     actionPanel.innerHTML = `
         <div class="actor-name" style="color:${teamColor(actor.teamId)}">${actor.name}</div>
-        <div class="hint">Choose a weapon and target, then fire it. Hits are resolved in order; damage waits until all ships finish Gunnery.</div>
+        <div class="hint">Choose a gunner, weapon and target, then fire. Damage applies after Gunnery.</div>
         ${actor.barrelRollActive ? '<div class="hint">Barrel Roll: port and starboard shields and weapon arcs are swapped for this Gunnery phase.</div>' : ''}
-        <div class="hint">Up to ${Math.min(actor.crewShotsRemaining, weapons.size)} shot${Math.min(actor.crewShotsRemaining, weapons.size) === 1 ? '' : 's'} remaining (${actor.crewShotsRemaining} available crew action${actor.crewShotsRemaining === 1 ? '' : 's'}).</div>
-        ${actor.gunneryAction === 'Snap Shot' ? '<div class="hint">Snap Shot: one weapon, with a −2 gunnery penalty; uses a minor crew action.</div>' : ''}
+        <div class="hint">${actor.crewShotsRemaining} shot${actor.crewShotsRemaining === 1 ? '' : 's'} available.</div>
+        ${gunners.length ? `<div class="eng-row"><label for="gunner-select">Gunner</label><select id="gunner-select">${gunners.map(g => `<option value="${gunneryChoiceKey(g)}" ${gunneryChoiceKey(g) === selectedGunneryKey ? 'selected' : ''}>${g.crewIndex == null ? 'Ship' : `${g.snapShot ? 'Crew' : 'Gunner'} ${g.crewIndex + 1}`} (${g.bonus >= 0 ? '+' : ''}${g.bonus})${g.fireAtWill ? ` · Fire at Will (${g.shots} left)` : g.snapShot ? ' · Snap Shot' : ''}</option>`).join('')}</select></div>` : ''}
+        ${gunner && gunner.crewIndex != null && !gunner.fireAtWill && !gunner.snapShot ? '<button class="btn btn-ghost" id="btn-fire-at-will" title="Spend this gunner’s action for two shots at −4.">Fire at Will (−4)</button>' : ''}
         <div id="arc-choice" class="target-info"></div>
         <div class="weapon-chips">${chips || '<span class="hint">No weapons can fire.</span>'}</div>
         <div id="target-info" class="target-info"></div>
@@ -96,6 +100,22 @@ function renderGunnery() {
     const targetInfo = document.getElementById('target-info');
     const arcChoiceEl = document.getElementById('arc-choice');
 
+    document.getElementById('gunner-select')?.addEventListener('change', event => {
+        selectedGunneryKey = event.target.value;
+        renderGunnery();
+    });
+    document.getElementById('btn-fire-at-will')?.addEventListener('click', async event => {
+        event.currentTarget.disabled = true;
+        try {
+            await api(`/${roomCode}/fire-at-will`, { crewIndex: gunner.crewIndex });
+            selectedGunneryKey = null;
+            await fetchState();
+        } catch (err) {
+            event.currentTarget.disabled = false;
+            addLog('error', `Could not activate Fire at Will: ${err.message}`);
+        }
+    });
+
     function refresh() {
         // Highlight the targets reachable by the active weapon.
         if (activeWeapon !== null) {
@@ -103,8 +123,13 @@ function renderGunnery() {
             grid.setTargets(opts.map(o => [o.targetShipId, o.arcHitChances?.[selectedTargetArcs.get(o.targetShipId)] ?? o.hitChancePercent]));
             const activeArcOption = opts.find(o => o.targetShipId === selectedShots.get(activeWeapon) && o.arcChoiceRequired);
             if (activeArcOption) {
-                const selected = selectedTargetArcs.get(activeArcOption.targetShipId);
-                arcChoiceEl.innerHTML = `<span class="hint">${activeArcOption.flyby ? 'Flyby: choose the firing arc for this turret.' : 'This target is on an arc boundary. Choose one firing arc for all attacks against it this round.'}</span><div class="weapon-chips">${activeArcOption.arcChoices.map(arc => `<button class="weapon-chip arc-choice${selected === arc ? ' active' : ''}" data-arc="${arc}" data-target="${activeArcOption.targetShipId}">${arc}${activeArcOption.arcHitChances?.[arc] != null ? ` · ${activeArcOption.arcHitChances[arc]}%` : ''}</button>`).join('')}</div>`;
+                const legalArcs = (activeArcOption.arcChoices || []).filter(arc => activeArcOption.arcHitChances?.[arc] != null);
+                let selected = selectedTargetArcs.get(activeArcOption.targetShipId);
+                if (!legalArcs.includes(selected) && legalArcs.length) {
+                    selected = legalArcs.reduce((best, arc) => activeArcOption.arcHitChances[arc] > activeArcOption.arcHitChances[best] ? arc : best);
+                    selectedTargetArcs.set(activeArcOption.targetShipId, selected);
+                }
+                arcChoiceEl.innerHTML = `<span class="hint">${activeArcOption.flyby ? 'Flyby firing arc' : 'Firing arc for this target'}</span><div class="weapon-chips">${legalArcs.map(arc => `<button class="weapon-chip arc-choice${selected === arc ? ' active' : ''}" data-arc="${arc}" data-target="${activeArcOption.targetShipId}">${arc} · ${activeArcOption.arcHitChances[arc]}%</button>`).join('')}</div>`;
                 arcChoiceEl.querySelectorAll('[data-arc]').forEach(button => button.addEventListener('click', () => {
                     selectedTargetArcs.set(button.dataset.target, button.dataset.arc);
                     refresh();
@@ -133,7 +158,8 @@ function renderGunnery() {
         }
 
         // Show current assignments.
-        const assigned = [...selectedShots.entries()];
+        const assigned = activeWeapon !== null && selectedShots.has(activeWeapon)
+            ? [[activeWeapon, selectedShots.get(activeWeapon)]] : [];
         if (assigned.length) {
             targetInfo.innerHTML += `<div class="shot-list">${assigned.map(([widx, tid]) => {
                 const w = actor.weapons?.[widx];
@@ -142,8 +168,8 @@ function renderGunnery() {
                 const opt = (weapons.get(widx) || []).find(o => o.targetShipId === tid);
                 const penalties = opt ? [opt.rangePenalty && `${opt.rangePenalty} range`, opt.arcPenalty && `${opt.arcPenalty} arc`].filter(Boolean).join(', ') : '';
                 const rangeStr = opt ? ` [${opt.range} hex${opt.range !== 1 ? 'es' : ''}${penalties ? `, ${penalties}` : ''}]` : '';
-                const status = fired.has(widx) ? ' · fired' : '';
-                return `<span class="shot-item">${label} → ${t?.name ?? '?'}${rangeStr}${status}</span>`;
+                const chance = opt?.arcHitChances?.[selectedTargetArcs.get(tid)] ?? opt?.hitChancePercent;
+                return `<span class="shot-item">${label} → ${t?.name ?? '?'}${chance != null ? ` · ${chance}%` : ''}${rangeStr}</span>`;
             }).join('')}</div>`;
         }
 
@@ -159,17 +185,15 @@ function renderGunnery() {
 
     refreshGunnery = refresh; // expose for the ship-click dispatcher
 
-    actionPanel.querySelectorAll('.weapon-chip:not(:disabled)').forEach(chip => {
+    actionPanel.querySelectorAll('.weapon-chip[data-weapon]:not(:disabled)').forEach(chip => {
         chip.addEventListener('click', () => {
             const idx = parseInt(chip.dataset.weapon, 10);
-            activeWeapon = (activeWeapon === idx) ? null : idx;
+            activeWeapon = idx;
             if (activeWeapon !== null && !selectedShots.has(idx)) {
                 const opts = weapons.get(idx) || [];
-                const eligible = opts.filter(o => !o.arcChoiceRequired || !selectedTargetArcs.has(o.targetShipId) ||
-                    o.arc === 'AllArcs' || o.broadArc || o.arc === selectedTargetArcs.get(o.targetShipId));
-                if (eligible.length) assignGunneryTarget(idx, eligible.reduce((best, o) => o.range < best.range ? o : best).targetShipId);
+                if (opts.length) assignGunneryTarget(idx, opts.reduce((best, o) => o.range < best.range ? o : best).targetShipId);
             }
-            actionPanel.querySelectorAll('.weapon-chip').forEach(c =>
+            actionPanel.querySelectorAll('.weapon-chip[data-weapon]').forEach(c =>
                 c.classList.toggle('active', parseInt(c.dataset.weapon, 10) === activeWeapon));
             refresh();
         });
@@ -185,9 +209,17 @@ function renderGunnery() {
         const arc = option?.arcChoiceRequired ? selectedTargetArcs.get(targetShipId) : undefined;
         if (option?.arcChoiceRequired && !arc) return;
         const targetQuadrant = option?.flyby ? document.getElementById('flyby-quadrant')?.value : undefined;
-        const response = await api(`/${roomCode}/fire`, { weaponIndex: activeWeapon, targetShipId, arc, targetQuadrant });
-        if (!response.ok) addLog('error', 'Weapon could not fire.');
-        await fetchState();
+        fireBtn.disabled = true;
+        try {
+            const response = await api(`/${roomCode}/fire`, { weaponIndex: activeWeapon, targetShipId, arc, targetQuadrant,
+                crewIndex: gunner?.crewIndex ?? null, fireAtWill: !!gunner?.fireAtWill });
+            if (!response.ok) addLog('error', 'Weapon could not fire.');
+            else selectedGunneryKey = null;
+            await fetchState();
+        } catch (err) {
+            addLog('error', `Could not fire: ${err.message}`);
+            refresh();
+        }
     });
 
     document.getElementById('btn-end-fire').addEventListener('click', async () => {

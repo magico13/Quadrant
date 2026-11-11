@@ -213,17 +213,14 @@ function renderPatchDialog() {
     if (!canContinuePatch()) { clearPatch(); renderEngineering(); return; }
     const pending = pendingPatch;
     const ship = patchShip();
-    const engineer = ship.crew[pending.crewIndex];
     const target = selectedPatchTarget(ship);
     const lockedFast = target?.fastSelected;
     const fastAvailable = !!target && ['Malfunctioning', 'Wrecked'].includes(target.condition);
     const chance = patchChance(ship);
     holdDialog.innerHTML = `<div class="sd-header"><span class="sd-name" id="patch-title">Patch System · ${reportEscape(ship.name)}</span><button class="btn btn-ghost sd-close" id="btn-close-patch" aria-label="Close Patch dialog" ${pending.submitting ? 'disabled' : ''}>×</button></div>
-        ${ShipSchematic.render(ship, { mode: 'patch', selectedSystem: pending.target, selectedArc: pending.visibleArc })}
-        ${fastAvailable ? `<label class="patch-fast-option"><input type="checkbox" id="patch-fast" ${pending.fast || lockedFast === true ? 'checked' : ''} ${pending.submitting || lockedFast != null ? 'disabled' : ''}> Fast</label>` : ''}
-        <div class="hint patch-preview" id="patch-preview">${target ? reportEscape(patchDescription(ship)) : 'Select a damaged system.'}</div>
-        <div class="patch-chance" id="patch-chance">Success chance: ${chance != null ? `${chance}%` : '—'}</div>
-        <div class="system-picker-actions hold-dialog-actions"><button class="btn btn-primary" id="btn-confirm-patch" ${pending.submitting || !target || target.alreadyPatched || target.appliedAt ? 'disabled' : ''}>${pending.submitting ? 'Attempting…' : 'Confirm Patch'}</button><button class="btn btn-ghost" id="btn-cancel-patch" ${pending.submitting ? 'disabled' : ''}>Cancel</button></div>
+        ${ShipSchematic.render(ship, { mode: 'patch', selectedSystem: pending.target, selectedArc: pending.visibleArc,
+            patchFast: { available: fastAvailable, checked: pending.fast || lockedFast === true, disabled: pending.submitting || lockedFast != null } })}
+        <div class="system-picker-actions hold-dialog-actions"><button class="btn btn-primary" id="btn-confirm-patch" ${pending.submitting || !target || target.alreadyPatched || target.appliedAt ? 'disabled' : ''}>${pending.submitting ? 'Attempting…' : `Confirm Patch${chance != null ? ` (${chance}%)` : ''}`}</button><button class="btn btn-ghost" id="btn-cancel-patch" ${pending.submitting ? 'disabled' : ''}>Cancel</button></div>
         <div class="hint" id="patch-error" role="status">${reportEscape(pending.error)}</div>`;
     ShipSchematic.bind(holdDialog, ship, {
         mode: 'patch', selectedSystem: pending.target, selectedArc: pending.visibleArc,

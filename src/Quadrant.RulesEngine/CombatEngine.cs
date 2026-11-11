@@ -488,19 +488,64 @@ public sealed class CombatEngine
     //  Gunnery phase: firing
     // ────────────────────────────────────────────────
 
+    public sealed record GunneryChoice(int? CrewIndex, bool FireAtWill, bool SnapShot, int Shots, int Bonus);
+
+    public IReadOnlyList<GunneryChoice> GetGunneryChoices()
+    {
+        var ship = _state.CurrentActor;
+        if (ship is null || _state.Phase != CombatPhase.Gunnery) return [];
+        ship.InitializeCrewRoles();
+        if (ship.Definition.Crew.Count == 0)
+            return [new GunneryChoice(null, false, false, ship.Weapons.Count, ship.Definition.GunnerBaseAttack + ship.Definition.DexterityModifier)];
+
+        var choices = new List<GunneryChoice>();
+        for (int i = 0; i < ship.CrewRoles.Count; i++)
+        {
+            if (ship.CrewRoles[i] != "Gunner") continue;
+            int bonus = ship.CrewBonus(i, "gunnery", "Gunner");
+            if (!ship.CrewActionsUsed.Contains(i)) choices.Add(new GunneryChoice(i, false, false, 1, bonus));
+            if (ship.FireAtWillShots.TryGetValue(i, out int remaining) && remaining > 0)
+                choices.Add(new GunneryChoice(i, true, false, remaining, bonus - 4));
+        }
+        if (choices.Count == 0 && !ship.GunnerActionTaken && ship.AvailableMinorCrew() is var crew && crew >= 0)
+            choices.Add(new GunneryChoice(crew, false, true, 1, ship.CrewBonus(crew, "gunnery", "Gunner") - 2));
+        return choices.OrderByDescending(choice => choice.Bonus).ThenBy(choice => choice.CrewIndex).ToList();
+    }
+
+    public string? ActivateFireAtWill(int crewIndex)
+    {
+        var ship = _state.CurrentActor;
+        if (ship is null || _state.Phase != CombatPhase.Gunnery || ship.IsDisabled || ship.IsDestroyed)
+            return "Fire at Will is only available for the current ship during Gunnery.";
+        ship.InitializeCrewRoles();
+        if (crewIndex < 0 || crewIndex >= ship.CrewRoles.Count || ship.CrewRoles[crewIndex] != "Gunner" ||
+            ship.CrewActionsUsed.Contains(crewIndex)) return "Select an available gunner.";
+        ship.CrewActionsUsed.Add(crewIndex);
+        ship.GunnerActionTaken = true;
+        ship.FireAtWillShots[crewIndex] = 2;
+        LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId, $"{ShipLogName(ship)} · Gunner {crewIndex + 1} activates Fire at Will."));
+        return null;
+    }
+
+    private static bool CanPushWeapon(ShipInstance ship, Weapon weapon, Hex target, FiringArc? arc)
+        => ship.Systems.GetEffectiveWeaponArc(ship.WeaponConditionArc(weapon, target, arc))
+            is not (SystemCondition.Malfunctioning or SystemCondition.Wrecked);
+
     /// <summary>
     /// Applies a fire action for the current actor. Resolves the attack and applies damage.
     /// </summary>
-    public AttackCheckResult? ApplyFire(FireAction action, FiringArc? chosenArc = null)
+    public AttackCheckResult? ApplyFire(FireAction action, FiringArc? chosenArc = null, int? crewIndex = null, bool fireAtWill = false)
     {
         var ship = _state.CurrentActor;
         if (ship is null || _state.Phase != CombatPhase.Gunnery)
             return null;
 
-        int gunner = ship.AvailableGunner();
-        bool snapShot = ship.Definition.Crew.Count > 0 && gunner < 0;
-        int actingCrew = snapShot ? ship.AvailableMinorCrew() : gunner;
-        if (snapShot && (ship.GunnerActionTaken || actingCrew < 0)) return null;
+        var choices = GetGunneryChoices();
+        var choice = crewIndex is null && !fireAtWill ? choices.FirstOrDefault()
+            : choices.FirstOrDefault(c => c.CrewIndex == crewIndex && c.FireAtWill == fireAtWill);
+        if (choice is null) return null;
+        bool snapShot = choice.SnapShot;
+        int actingCrew = choice.CrewIndex ?? -1;
 
         if (action.WeaponIndex < 0 || action.WeaponIndex >= ship.Weapons.Count)
         {
@@ -537,6 +582,7 @@ public sealed class CombatEngine
         }
         if (mountIndices.Any(i => _firedWeapons.Contains((ship.InstanceId, i)))) return null;
         var arcKey = (ship.InstanceId, target.InstanceId);
+        FiringArc? proposedArc = null;
         bool sharedBoundary = IsSharedArcBoundary(targetAngle);
         if (!flyby && sharedBoundary)
         {
@@ -550,7 +596,7 @@ public sealed class CombatEngine
             if (selectedArc is null && (weapon.Arc != FiringArc.AllArcs || availableArcs.Count > 0)) return null;
             if (selectedArc is not null && ((!alreadyChosen && !availableArcs.Contains(selectedArc.Value)) ||
                 (weapon.Arc != FiringArc.AllArcs && !weapon.BroadArc && weapon.Arc != selectedArc))) return null;
-            if (selectedArc is not null) _targetArcChoices[arcKey] = selectedArc.Value;
+            proposedArc = selectedArc;
         }
         else if (!flyby && _targetArcChoices.TryGetValue(arcKey, out var selectedArc) && weapon.Arc != FiringArc.AllArcs && !weapon.BroadArc && weapon.Arc != selectedArc)
         {
@@ -568,6 +614,9 @@ public sealed class CombatEngine
             LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId, $"{weapon.Name} has no projectile speed configured."));
             return null;
         }
+        var firingArc = flybyArc ?? proposedArc ?? (_targetArcChoices.TryGetValue(arcKey, out var committedFiringArc) ? committedFiringArc : (FiringArc?)null);
+        if (choice.FireAtWill && !CanPushWeapon(ship, weapon, target.Position, firingArc)) return null;
+        if (proposedArc is { } arcToCommit) _targetArcChoices[arcKey] = arcToCommit;
         foreach (int index in mountIndices)
         {
             if (!_firedWeapons.Add((ship.InstanceId, index))) return null;
@@ -575,13 +624,16 @@ public sealed class CombatEngine
         }
         if (flyby) ship.FlybyFiringArc = flybyArc;
 
-        var firingArc = flybyArc ?? (_targetArcChoices.TryGetValue(arcKey, out var committedFiringArc) ? committedFiringArc : (FiringArc?)null);
-        int? crewBonus = actingCrew >= 0 ? ship.CrewBonus(actingCrew, "gunnery", "Gunner") : null;
+        int? crewBonus = actingCrew >= 0 ? choice.Bonus : null;
         if (crewBonus.HasValue)
         {
             int penalty = ship.WeaponActionPenalty(weapon, target.Position, firingArc);
-            crewBonus = penalty == int.MinValue ? int.MinValue : crewBonus.Value + penalty + ship.Systems.PowerCoreGlobalPenalty - (snapShot ? 2 : 0);
+            crewBonus = penalty == int.MinValue ? int.MinValue : crewBonus.Value + penalty + ship.Systems.PowerCoreGlobalPenalty;
             if (snapShot) ship.CrewMinorActionsUsed.Add(actingCrew);
+            else if (choice.FireAtWill)
+            {
+                if (--ship.FireAtWillShots[actingCrew] == 0) ship.FireAtWillShots.Remove(actingCrew);
+            }
             else ship.CrewActionsUsed.Add(actingCrew);
             ship.GunnerActionTaken = true;
         }
@@ -613,7 +665,7 @@ public sealed class CombatEngine
                 OwnerShipId = ship.InstanceId, TargetShipId = target.InstanceId,
                 Position = flyby ? target.Position.Step(flybyDirection, 1) : ship.Position,
                 Facing = flyby ? (Facing)((flybyDirection + 3) % Hex.DirectionCount) : TrackingLaunchFacing(ship, target, weapon),
-                Speed = weapon.ProjectileSpeed, GunnerBonus = (crewBonus ?? CombatResolver.ComputeGunnerBonus(ship, weapon, target.Position, firingArc)) + (snapShot ? 2 : 0), Weapon = weapon,
+                Speed = weapon.ProjectileSpeed, GunnerBonus = (crewBonus ?? CombatResolver.ComputeGunnerBonus(ship, weapon, target.Position, firingArc)) + (snapShot ? 2 : 0) + (choice.FireAtWill ? 4 : 0), Weapon = weapon,
                 FlybyQuadrant = flyby ? action.TargetQuadrant : null
             };
             _pendingLaunches.Add((projectile, check, ++_nextAttackOrder));
@@ -656,6 +708,7 @@ public sealed class CombatEngine
     public void EndGunneryTurn()
     {
         if (_state.Phase != CombatPhase.Gunnery || _state.CurrentActor is null) return;
+        _state.CurrentActor.FireAtWillShots.Clear();
         AdvanceActor();
     }
 
@@ -1407,18 +1460,26 @@ public sealed class CombatEngine
     /// </summary>
     public List<TargetOption> GetValidTargets()
     {
+        foreach (var choice in GetGunneryChoices())
+        {
+            var targets = GetValidTargetsForChoice(choice);
+            if (targets.Count > 0) return targets;
+        }
+        return [];
+    }
+
+    public List<TargetOption> GetValidTargets(int? crewIndex, bool fireAtWill)
+    {
+        var choice = GetGunneryChoices().FirstOrDefault(c => c.CrewIndex == crewIndex && c.FireAtWill == fireAtWill);
+        return choice is null ? [] : GetValidTargetsForChoice(choice);
+    }
+
+    private List<TargetOption> GetValidTargetsForChoice(GunneryChoice choice)
+    {
         var ship = _state.CurrentActor;
         if (ship is null || _state.Phase != CombatPhase.Gunnery) return [];
 
-        int bonus = ship.Definition.GunnerBaseAttack + ship.Definition.DexterityModifier + ship.Systems.PowerCoreGlobalPenalty;
-        if (ship.Definition.Crew.Count > 0)
-        {
-            int gunner = ship.AvailableGunner();
-            bool snap = gunner < 0;
-            int crew = snap ? ship.AvailableMinorCrew() : gunner;
-            if (crew < 0 || (snap && ship.GunnerActionTaken)) return [];
-            bonus = ship.CrewBonus(crew, "gunnery", "Gunner") + ship.Systems.PowerCoreGlobalPenalty - (snap ? 2 : 0);
-        }
+        int bonus = choice.Bonus + ship.Systems.PowerCoreGlobalPenalty;
         var options = new List<TargetOption>();
         var arcChoices = new Dictionary<string, List<FiringArc>>();
         foreach (var target in _state.ActiveShips().Where(target => target.TeamId != ship.TeamId))
@@ -1450,6 +1511,7 @@ public sealed class CombatEngine
                     int defense = weapon.Type == WeaponType.Tracking ? target.CurrentTL : target.CurrentAC;
                     var flybyArcs = chooseArc ? ShipInstance.StandardWeaponArcs.ToList() : new List<FiringArc> { ship.FlybyFiringArc ?? weapon.Arc };
                     var chances = flybyArcs.Where(a => ship.WeaponActionPenalty(weapon, target.Position, a) != int.MinValue)
+                        .Where(a => !choice.FireAtWill || CanPushWeapon(ship, weapon, target.Position, a))
                         .ToDictionary(a => a, a => CombatResolver.HitChancePercent(bonus + ship.WeaponActionPenalty(weapon, target.Position, a), defense));
                     if (chances.Count == 0) continue;
                     options.Add(new TargetOption(CombineLinkedWeapon(ship, wi, mountIndices).Name, target.InstanceId, 1,
@@ -1474,6 +1536,7 @@ public sealed class CombatEngine
                 var firingArcs = weapon.Arc == FiringArc.AllArcs && choices.Count > 0 ? choices : FiringArcsFor(weapon, angle).ToList();
                 if (weapon.Arc == FiringArc.AllArcs && _targetArcChoices.TryGetValue((ship.InstanceId, target.InstanceId), out var chosen)) firingArcs = [chosen];
                 var chancesByArc = firingArcs.Where(a => ship.WeaponActionPenalty(weapon, target.Position, a) != int.MinValue)
+                    .Where(a => !choice.FireAtWill || CanPushWeapon(ship, weapon, target.Position, a))
                     .ToDictionary(a => a, a => CombatResolver.HitChancePercent(bonus + ship.WeaponActionPenalty(weapon, target.Position, a) + rangePenalty + arcPenalty, defenseValue));
                 if (chancesByArc.Count == 0) continue;
                 int hitChance = chancesByArc.Values.Max();

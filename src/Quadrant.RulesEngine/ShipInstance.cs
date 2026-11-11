@@ -129,6 +129,8 @@ public sealed class ShipInstance
     public HashSet<int> CrewActionsUsed { get; } = [];
     public HashSet<int> CrewMinorActionsUsed { get; } = [];
     public bool GunnerActionTaken { get; set; }
+    /// <summary>Unspent Fire at Will shots keyed by the gunner who activated them.</summary>
+    public Dictionary<int, int> FireAtWillShots { get; } = new();
     /// <summary>Null before a Maneuver attempt; otherwise its result for this round.</summary>
     public bool? ManeuverSucceeded { get; set; }
 
@@ -145,7 +147,8 @@ public sealed class ShipInstance
         InitializeCrewRoles();
         if (Definition.Crew.Count == 0) return Weapons.Count;
         int gunners = CrewRoles.Select((role, i) => (role, i)).Count(x => x.role == "Gunner" && !CrewActionsUsed.Contains(x.i));
-        return gunners > 0 ? gunners : !GunnerActionTaken && AvailableMinorCrew() >= 0 ? 1 : 0;
+        int shots = gunners + FireAtWillShots.Values.Sum();
+        return shots > 0 ? shots : !GunnerActionTaken && AvailableMinorCrew() >= 0 ? 1 : 0;
     }
 
     public int AvailableMinorCrew()
@@ -322,6 +325,7 @@ public sealed class ShipInstance
         ManeuverSucceeded = null;
         CrewMinorActionsUsed.Clear();
         GunnerActionTaken = false;
+        FireAtWillShots.Clear();
         DivertEngines = DivertWeapons = DivertScience = false;
         EngineeringActionsUsed.Clear();
         Systems.HeldSystem = null;
