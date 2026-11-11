@@ -89,7 +89,7 @@ function renderGunnery() {
         ${actor.barrelRollActive ? '<div class="hint">Barrel Roll: port and starboard shields and weapon arcs are swapped for this Gunnery phase.</div>' : ''}
         <div class="hint">${actor.crewShotsRemaining} shot${actor.crewShotsRemaining === 1 ? '' : 's'} available.</div>
         ${gunners.length ? `<div class="eng-row"><label for="gunner-select">Gunner</label><select id="gunner-select">${gunners.map(g => `<option value="${gunneryChoiceKey(g)}" ${gunneryChoiceKey(g) === selectedGunneryKey ? 'selected' : ''}>${g.crewIndex == null ? 'Ship' : `${g.snapShot ? 'Crew' : 'Gunner'} ${g.crewIndex + 1}`} (${g.bonus >= 0 ? '+' : ''}${g.bonus})${g.fireAtWill ? ` · Fire at Will (${g.shots} left)` : g.snapShot ? ' · Snap Shot' : ''}</option>`).join('')}</select></div>` : ''}
-        ${gunner && gunner.crewIndex != null && !gunner.fireAtWill && !gunner.snapShot ? '<button class="btn btn-ghost" id="btn-fire-at-will" title="Spend this gunner’s action for two shots at −4.">Fire at Will (−4)</button>' : ''}
+        ${gunner && gunner.crewIndex != null && !gunner.fireAtWill && !gunner.snapShot && usableIndices.length > 1 ? '<button class="btn btn-ghost" id="btn-fire-at-will" title="Spend this gunner’s action for two shots at −4.">Fire at Will (−4)</button>' : ''}
         <div id="arc-choice" class="target-info"></div>
         <div class="weapon-chips">${chips || '<span class="hint">No weapons can fire.</span>'}</div>
         <div id="target-info" class="target-info"></div>
