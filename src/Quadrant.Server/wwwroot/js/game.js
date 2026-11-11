@@ -1,11 +1,26 @@
 // Quadrant client bootstrap: shared state, REST calls, phase routing, and map event dispatch.
-fetch('/api/health').then(response => response.ok ? response.json() : null).then(health => {
-    const version = document.getElementById('build-version');
-    if (health?.build && health.build !== 'unknown' && version) {
-        version.textContent = health.build;
-        version.title = `Build ${health.build}`;
-    }
-}).catch(() => {});
+const CLIENT_BUILD_ID = 'development';
+
+async function checkForClientUpdate() {
+    try {
+        const response = await fetch('/api/health', { cache: 'no-store' });
+        if (!response.ok) return;
+        const health = await response.json();
+        const build = health.build;
+        const version = document.getElementById('build-version');
+        const notice = document.getElementById('update-notice');
+        if (version && build && build !== 'unknown') {
+            version.textContent = build.slice(0, 7);
+            version.title = `Build ${build}`;
+        }
+        if (notice && CLIENT_BUILD_ID !== 'unknown' && build && build !== CLIENT_BUILD_ID)
+            notice.classList.remove('hidden');
+    } catch { /* The game remains usable if the health check fails. */ }
+}
+
+checkForClientUpdate();
+setInterval(checkForClientUpdate, 60_000);
+document.getElementById('btn-refresh-client')?.addEventListener('click', () => location.reload());
 // Phase renderers and ship UI live in the sibling game-*.js classic scripts.
 
 const canvas = document.getElementById('hex-canvas');

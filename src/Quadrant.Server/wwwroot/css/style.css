@@ -55,6 +55,16 @@ html, body {
     vertical-align: middle;
 }
 
+#update-notice {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #ffcf7a;
+    font-size: 13px;
+}
+
+#update-notice.hidden { display: none; }
+
 #phase-indicator, #round-indicator {
     padding: 4px 14px;
     border-radius: 4px;

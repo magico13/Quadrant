@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Reflection;
 using Quadrant.Server.Sessions;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -62,9 +63,9 @@ app.MapControllers();
 app.MapFallbackToFile("index.html");
 
 // Health check.
-var buildCommit = Environment.GetEnvironmentVariable("QUADRANT_BUILD_COMMIT") ?? "unknown";
-if (buildCommit.Length > 7)
-    buildCommit = buildCommit[..7];
+var buildCommit = Assembly.GetEntryAssembly()?
+    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+    ?? "unknown";
 
 app.MapGet("/api/health", () => Results.Ok(new
 {
