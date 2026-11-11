@@ -1,5 +1,10 @@
 // Quadrant client bootstrap: shared state, REST calls, phase routing, and map event dispatch.
 const CLIENT_BUILD_ID = 'development';
+const buildVersionEl = document.getElementById('build-version');
+if (buildVersionEl) {
+    buildVersionEl.textContent = CLIENT_BUILD_ID.slice(0, 7);
+    buildVersionEl.title = `Client: ${CLIENT_BUILD_ID}\nServer: unknown`;
+}
 
 async function checkForClientUpdate() {
     try {
@@ -7,12 +12,8 @@ async function checkForClientUpdate() {
         if (!response.ok) return;
         const health = await response.json();
         const build = health.build;
-        const version = document.getElementById('build-version');
         const notice = document.getElementById('update-notice');
-        if (version && build && build !== 'unknown') {
-            version.textContent = build.slice(0, 7);
-            version.title = `Build ${build}`;
-        }
+        if (buildVersionEl) buildVersionEl.title = `Client: ${CLIENT_BUILD_ID}\nServer: ${build || 'unknown'}`;
         if (notice && CLIENT_BUILD_ID !== 'unknown' && build && build !== CLIENT_BUILD_ID)
             notice.classList.remove('hidden');
     } catch { /* The game remains usable if the health check fails. */ }
