@@ -8,26 +8,32 @@ function renderEngineering() {
     const ships = state.ships.filter(s => !s.isDestroyed && !s.isDisabled);
     actionPanel.innerHTML = `
         <div class="actor-name">Engineering</div>
-        <div class="hint">Each engineer can take one action. Divert and Hold It Together can each be attempted once per ship this round.</div>
+        <div class="hint">Each engineer takes one action. Divert and Hold It Together are once per ship each round. Patch progress carries over.</div>
         ${ships.map(ship => {
             const engineers = (ship.crew || []).map((crew, i) => ({ ...crew, i })).filter(c => c.role === 'Engineer' && !c.actionUsed);
             const used = new Set(ship.engineeringActionsUsed || []);
             const holdTargets = [];
-            if (!used.has('Hold It Together')) for (const system of (ship.systems || []).filter(system => system.system !== 'WeaponsArray' && system.condition !== 'None'))
+            if (!used.has('Hold It Together')) for (const system of (ship.systems || []).filter(system => system.system !== 'WeaponsArray' && system.effectiveCondition !== 'None'))
                 holdTargets.push(system.system);
-            if (!used.has('Hold It Together')) for (const arc of (ship.weaponArcs || []).filter(arc => arc.condition !== 'None'))
+            if (!used.has('Hold It Together')) for (const arc of (ship.weaponArcs || []).filter(arc => arc.effectiveCondition !== 'None'))
                 holdTargets.push(`WeaponsArray|${arc.installedArc}`);
+            const patchTargets = engineerPatchTargets(ship);
+            const patchProgress = (ship.patches || []).filter(p => !p.appliedAt)
+                .map(p => `${p.weaponArc ? `${p.weaponArc} ` : ''}${p.system === 'WeaponsArray' ? 'Weapons' : p.system} ${p.successfulChecks}/${p.requiredChecks}`);
             return `<div class="detail-section" style="color:${teamColor(ship.teamId)}">${ship.name} (Team ${ship.teamId + 1})</div>
                 ${engineers.length ? `<div class="eng-row"><label>Engineer</label><select id="engineer-${ship.id}">${engineers.map(c => `<option value="${c.i}">${c.primaryRole} ${c.i + 1} (${c.roleBonus >= 0 ? '+' : ''}${c.roleBonus})</option>`).join('')}</select></div>
                 ${!used.has('Divert') ? `<button class="btn btn-ghost" data-divert-ship="${ship.id}">Divert Power</button>` : ''}
                 ${holdTargets.length ? `<button class="btn btn-ghost" data-hold-ship="${ship.id}">Hold It Together</button>` : ''}
-                ${used.has('Divert') && !holdTargets.length ? '<div class="hint">No available engineer action.</div>' : ''}` : '<div class="hint">No available engineer action.</div>'}`;
+                ${patchTargets.length ? `<button class="btn btn-ghost" data-patch-ship="${ship.id}">Patch System</button>` : ''}
+                ${patchProgress.length ? `<div class="hint">Patch progress · ${patchProgress.map(reportEscape).join(' · ')}</div>` : ''}
+                ${used.has('Divert') && !holdTargets.length && !patchTargets.length ? '<div class="hint">No available engineer action.</div>' : ''}` : '<div class="hint">No available engineer action.</div>'}`;
         }).join('')}
         <button class="btn btn-primary" id="btn-end-eng">End Engineering</button>`;
     for (const ship of ships) {
         const engineerSelect = document.getElementById(`engineer-${ship.id}`);
         if (!engineerSelect) continue;
         const holdButton = actionPanel.querySelector(`[data-hold-ship="${ship.id}"]`);
+        const patchButton = actionPanel.querySelector(`[data-patch-ship="${ship.id}"]`);
         const divertButton = actionPanel.querySelector(`[data-divert-ship="${ship.id}"]`);
         const update = () => {
             const crew = ship.crew[Number(engineerSelect.value)];
@@ -38,6 +44,7 @@ function renderEngineering() {
         update();
         divertButton?.addEventListener('click', () => startDivert(ship.id, Number(engineerSelect.value)));
         holdButton?.addEventListener('click', () => startHold(ship.id, Number(engineerSelect.value)));
+        patchButton?.addEventListener('click', () => startPatch(ship.id, Number(engineerSelect.value)));
     }
     document.getElementById('btn-end-eng').addEventListener('click', async () => {
         await api(`/${roomCode}/end-engineering`);
@@ -130,6 +137,144 @@ async function confirmHold() {
     clearHold();
     try { await fetchState(); }
     catch (err) { renderEngineering(); addLog('error', `Hold It Together was submitted, but state could not refresh: ${err.message}`); }
+}
+
+function engineerPatchTargets(ship) {
+    const completed = new Set((ship.patches || []).filter(p => p.active).map(p => `${p.system}|${p.weaponArc || ''}`));
+    const targets = (ship.systems || []).filter(s => s.system !== 'WeaponsArray' && s.condition !== 'None')
+        .map(s => `${s.system}|`);
+    for (const arc of (ship.weaponArcs || []).filter(a => a.condition !== 'None')) targets.push(`WeaponsArray|${arc.installedArc}`);
+    return targets.filter(key => !completed.has(key));
+}
+
+function patchShip() {
+    return pendingPatch ? state?.ships.find(ship => ship.id === pendingPatch.shipId) : null;
+}
+
+function canContinuePatch() {
+    const pending = pendingPatch;
+    const ship = patchShip();
+    const engineer = ship?.crew?.[pending?.crewIndex];
+    return !!pending && !!ship && !!engineer && state.phase === 'Engineering' && !state.isComplete &&
+        state.round === pending.round && !ship.isDestroyed && !ship.isDisabled && engineer.role === 'Engineer' && !engineer.actionUsed;
+}
+
+function clearPatch() {
+    pendingPatch = null;
+    if (holdDialog.open) holdDialog.close();
+}
+
+function startPatch(shipId, crewIndex) {
+    const ship = state?.ships.find(candidate => candidate.id === shipId);
+    if (state?.phase !== 'Engineering' || !ship || ship.isDestroyed || ship.isDisabled ||
+        ship.crew[crewIndex]?.role !== 'Engineer' || ship.crew[crewIndex]?.actionUsed || !engineerPatchTargets(ship).length) return;
+    pendingPatch = { shipId, crewIndex, round: state.round, target: null, visibleArc: null, weaponArc: null,
+        fast: false, submitting: false, error: '' };
+    detailsShipId = null;
+    hideShipDetails();
+    renderPatchDialog();
+}
+
+function selectedPatchTarget(ship, pending = pendingPatch) {
+    if (!pending?.target) return null;
+    const arc = pending.target === 'WeaponsArray' ? pending.weaponArc : null;
+    const crewTarget = ship.crew[pending.crewIndex].engineeringChances?.patchTargets?.find(t =>
+        t.system === pending.target && (t.weaponArc || null) === arc);
+    const progress = (ship.patches || []).find(p => p.system === pending.target && (p.weaponArc || null) === arc && (p.active || !p.appliedAt));
+    return crewTarget ? { ...crewTarget,
+        requiredChecks: progress?.requiredChecks ?? crewTarget.requiredChecks,
+        successfulChecks: progress?.successfulChecks ?? crewTarget.successfulChecks ?? 0,
+        fastSelected: progress?.fast ?? crewTarget.fastSelected,
+        alreadyPatched: progress?.active ?? crewTarget.alreadyPatched,
+        system: pending.target, weaponArc: arc } : null;
+}
+
+function patchChance(ship, pending = pendingPatch) {
+    const target = selectedPatchTarget(ship, pending);
+    if (!target) return null;
+    return target.fastSelected ? target.fast : pending.fast ? target.fast : target.standard;
+}
+
+function patchOutcome(condition) {
+    return ({ Glitching: 'Healthy', Malfunctioning: 'Glitching', Wrecked: 'Malfunctioning' })[condition] || 'Healthy';
+}
+
+function patchDescription(ship, pending = pendingPatch) {
+    const target = selectedPatchTarget(ship, pending);
+    if (!target) return 'Choose a damaged system or weapon arc.';
+    const required = target.requiredChecks ?? Math.max(1,
+        ({ Glitching: 1, Malfunctioning: 2, Wrecked: 3 })[target.condition] - (pending.fast && target.condition !== 'Glitching' ? 1 : 0));
+    const progress = target.successfulChecks || 0;
+    const remaining = Math.max(0, required - progress);
+    return `${target.condition} → ${patchOutcome(target.condition)} · ${progress}/${required} successes${remaining ? ` · ${remaining} left` : ''}`;
+}
+
+function renderPatchDialog() {
+    if (!canContinuePatch()) { clearPatch(); renderEngineering(); return; }
+    const pending = pendingPatch;
+    const ship = patchShip();
+    const engineer = ship.crew[pending.crewIndex];
+    const target = selectedPatchTarget(ship);
+    const lockedFast = target?.fastSelected;
+    const fastAvailable = !!target && ['Malfunctioning', 'Wrecked'].includes(target.condition);
+    const chance = patchChance(ship);
+    holdDialog.innerHTML = `<div class="sd-header"><span class="sd-name" id="patch-title">Patch System · ${reportEscape(ship.name)}</span><button class="btn btn-ghost sd-close" id="btn-close-patch" aria-label="Close Patch dialog" ${pending.submitting ? 'disabled' : ''}>×</button></div>
+        ${ShipSchematic.render(ship, { mode: 'patch', selectedSystem: pending.target, selectedArc: pending.visibleArc })}
+        ${fastAvailable ? `<label class="patch-fast-option"><input type="checkbox" id="patch-fast" ${pending.fast || lockedFast === true ? 'checked' : ''} ${pending.submitting || lockedFast != null ? 'disabled' : ''}> Fast</label>` : ''}
+        <div class="hint patch-preview" id="patch-preview">${target ? reportEscape(patchDescription(ship)) : 'Select a damaged system.'}</div>
+        <div class="patch-chance" id="patch-chance">Success chance: ${chance != null ? `${chance}%` : '—'}</div>
+        <div class="system-picker-actions hold-dialog-actions"><button class="btn btn-primary" id="btn-confirm-patch" ${pending.submitting || !target || target.alreadyPatched || target.appliedAt ? 'disabled' : ''}>${pending.submitting ? 'Attempting…' : 'Confirm Patch'}</button><button class="btn btn-ghost" id="btn-cancel-patch" ${pending.submitting ? 'disabled' : ''}>Cancel</button></div>
+        <div class="hint" id="patch-error" role="status">${reportEscape(pending.error)}</div>`;
+    ShipSchematic.bind(holdDialog, ship, {
+        mode: 'patch', selectedSystem: pending.target, selectedArc: pending.visibleArc,
+        patchDescription: (system, visibleArc) => {
+            const installedArc = system === 'WeaponsArray' ? ship.weaponArcs.find(a => a.arc === visibleArc)?.installedArc : null;
+            const candidate = { ...pending, target: system, visibleArc, weaponArc: installedArc };
+            return patchDescription(ship, candidate);
+        },
+        onSelect: (system, visibleArc, installedArc) => {
+            pending.target = system;
+            pending.visibleArc = visibleArc;
+            pending.weaponArc = system === 'WeaponsArray' ? installedArc : null;
+            const progress = selectedPatchTarget(ship);
+            pending.fast = progress?.fastSelected ?? false;
+            pending.error = '';
+            renderPatchDialog();
+        }
+    });
+    document.getElementById('patch-fast')?.addEventListener('change', event => {
+        pending.fast = event.target.checked;
+        renderPatchDialog();
+    });
+    document.getElementById('btn-confirm-patch').addEventListener('click', confirmPatch);
+    document.getElementById('btn-close-patch').addEventListener('click', () => { clearPatch(); renderEngineering(); });
+    document.getElementById('btn-cancel-patch').addEventListener('click', () => { clearPatch(); renderEngineering(); });
+    holdDialog.oncancel = event => {
+        if (pendingPatch?.submitting) { event.preventDefault(); return; }
+        clearPatch();
+        renderEngineering();
+    };
+    if (!holdDialog.open) holdDialog.showModal();
+}
+
+async function confirmPatch() {
+    if (!canContinuePatch() || pendingPatch.submitting || !pendingPatch.target) return;
+    const pending = pendingPatch;
+    pending.submitting = true;
+    pending.error = '';
+    renderPatchDialog();
+    try {
+        await api(`/${roomCode}/engineering`, { shipId: pending.shipId, crewIndex: pending.crewIndex,
+            action: 'Patch', target: pending.target, weaponArc: pending.weaponArc, fastPatch: pending.fast });
+    } catch (err) {
+        pending.submitting = false;
+        pending.error = `Could not attempt Patch: ${err.message}`;
+        renderPatchDialog();
+        return;
+    }
+    clearPatch();
+    try { await fetchState(); }
+    catch (err) { renderEngineering(); addLog('error', `Patch was submitted, but state could not refresh: ${err.message}`); }
 }
 
 const DIVERT_ARCS = ['forward', 'starboard', 'aft', 'port'];

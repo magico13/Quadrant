@@ -18,7 +18,7 @@ public sealed record PointDefensePrompt(string TargetShipId, FiringArc Arc, IRea
 public sealed record FiredWeaponSnapshot(string ShipId, int WeaponIndex);
 public sealed record TargetArcSnapshot(string ShipId, string TargetId, FiringArc Arc);
 public sealed record ShieldAllocation(int Forward, int Starboard, int Aft, int Port);
-public sealed record EngineerAction(string ShipId, int CrewIndex, string Action, string Target, ShieldAllocation? Shields, FiringArc? WeaponArc = null);
+public sealed record EngineerAction(string ShipId, int CrewIndex, string Action, string Target, ShieldAllocation? Shields, FiringArc? WeaponArc = null, bool FastPatch = false);
 public sealed record ScienceAction(string ShipId, int CrewIndex, string Action, string TargetShipId = "", string System = "", string FromQuadrant = "", string ToQuadrant = "", int Amount = 0, bool BalanceEvenly = false);
 public sealed record TargetedSystemSnapshot(string ShipId, string TargetShipId, ShipSystem System);
 public sealed record CombatEngineSnapshot(
@@ -814,6 +814,21 @@ public sealed class CombatEngine
         return CheckChance(ship.CrewBonus(crewIndex, "engineering", "Engineer") + penalty, dc);
     }
 
+    public int GetPatchSuccessChance(ShipInstance ship, int crewIndex, ShipSystem system, FiringArc? arc, bool fast)
+    {
+        var condition = system == ShipSystem.WeaponsArray
+            ? arc is { } weaponArc ? ship.Systems.GetWeaponArc(weaponArc) : SystemCondition.None
+            : ship.Systems.Get(system);
+        int dc = (int)Math.Floor(condition switch
+        {
+            SystemCondition.Glitching => 10 + 1.5 * ship.Definition.Tier,
+            SystemCondition.Malfunctioning => 15 + 1.5 * ship.Definition.Tier,
+            SystemCondition.Wrecked => 20 + 1.5 * ship.Definition.Tier,
+            _ => 0
+        }) + (fast ? 5 : 0);
+        return CheckChance(ship.CrewBonus(crewIndex, "engineering", "Engineer"), dc);
+    }
+
     public int GetScienceSuccessChance(ShipInstance ship, int crewIndex, ShipInstance? target = null)
     {
         int penalty = ship.Systems.GetActionPenalty(ShipSystem.Sensors);
@@ -836,8 +851,8 @@ public sealed class CombatEngine
         ship.InitializeCrewRoles();
         if (action.CrewIndex < 0 || action.CrewIndex >= ship.CrewRoles.Count || ship.CrewRoles[action.CrewIndex] != "Engineer" || ship.CrewActionsUsed.Contains(action.CrewIndex))
             return "Select an engineer who has not acted this round.";
-        if (action.Action is not ("Divert" or "Hold It Together")) return "Unknown engineering action.";
-        if (ship.EngineeringActionsUsed.Contains(action.Action)) return $"{action.Action} has already been attempted this round.";
+        if (action.Action is not ("Divert" or "Hold It Together" or "Patch")) return "Unknown engineering action.";
+        if (action.Action != "Patch" && ship.EngineeringActionsUsed.Contains(action.Action)) return $"{action.Action} has already been attempted this round.";
 
         ShipSystem heldSystem = default;
         if (action.Action == "Hold It Together" && (!Enum.TryParse(action.Target, true, out heldSystem) || !Enum.IsDefined(heldSystem)))
@@ -845,6 +860,25 @@ public sealed class CombatEngine
         if (action.Action == "Hold It Together" && heldSystem == ShipSystem.WeaponsArray &&
             (action.WeaponArc is not { } arc || !ship.OccupiedWeaponArcs.Contains(arc)))
             return "Select a weapon arc to hold together.";
+        if (action.Action == "Hold It Together" && (heldSystem == ShipSystem.WeaponsArray
+                ? ship.Systems.GetEffectiveWeaponArc(action.WeaponArc!.Value)
+                : ship.Systems.GetEffective(heldSystem)) == SystemCondition.None)
+            return "Select a system that still has an effective damage condition to hold together.";
+        if (action.Action == "Patch")
+        {
+            if (!Enum.TryParse(action.Target, true, out heldSystem) || !Enum.IsDefined(heldSystem))
+                return "Select a valid system to patch.";
+            if (heldSystem == ShipSystem.WeaponsArray &&
+                (action.WeaponArc is not { } patchArc || !ship.OccupiedWeaponArcs.Contains(patchArc)))
+                return "Select a weapon arc to patch.";
+            var condition = heldSystem == ShipSystem.WeaponsArray
+                ? ship.Systems.GetWeaponArc(action.WeaponArc!.Value) : ship.Systems.Get(heldSystem);
+            if (condition == SystemCondition.None) return "Select a critically damaged system to patch.";
+            var existing = ship.Systems.GetPatch(heldSystem, heldSystem == ShipSystem.WeaponsArray ? action.WeaponArc : null);
+            if (existing?.AppliedAt is not null) return "That system is already patched.";
+            if (existing is not null && existing.Fast != action.FastPatch)
+                return "Use the same Patch option selected when work on this system began.";
+        }
         if (action.Action == "Divert" && action.Target is not ("Engines" or "Science" or "Weapons" or "Shields"))
             return "Select a valid system for Divert.";
         if (action.Action == "Divert" && action.Target == "Shields")
@@ -859,8 +893,8 @@ public sealed class CombatEngine
         }
 
         ship.CrewActionsUsed.Add(action.CrewIndex);
-        ship.EngineeringActionsUsed.Add(action.Action);
-        int penalty = action.Action == "Hold It Together" ? 0 : ship.Systems.GetActionPenalty(ShipSystem.PowerCore);
+        if (action.Action != "Patch") ship.EngineeringActionsUsed.Add(action.Action);
+        int penalty = action.Action is "Hold It Together" or "Patch" ? 0 : ship.Systems.GetActionPenalty(ShipSystem.PowerCore);
         if (penalty == int.MinValue)
         {
             LastEvents.Add(new CombatEvent("Engineering", ship.InstanceId, $"{ShipLogName(ship)} · {action.Action}: power core wrecked — automatic failure."));
@@ -869,13 +903,29 @@ public sealed class CombatEngine
         int bonus = ship.CrewBonus(action.CrewIndex, "engineering", "Engineer") + penalty;
         int roll = _dice.RollD20();
         int total = roll + bonus;
-        int dc = (int)Math.Floor((action.Action == "Divert" ? 10 : 15) + 1.5 * ship.Definition.Tier);
+        int dc;
+        SystemPatch? patch = null;
+        if (action.Action == "Patch")
+        {
+            patch = ship.Systems.StartOrGetPatch(heldSystem,
+                heldSystem == ShipSystem.WeaponsArray ? action.WeaponArc : null, action.FastPatch);
+            dc = (int)Math.Floor(patch.Condition switch
+            {
+                SystemCondition.Glitching => 10 + 1.5 * ship.Definition.Tier,
+                SystemCondition.Malfunctioning => 15 + 1.5 * ship.Definition.Tier,
+                SystemCondition.Wrecked => 20 + 1.5 * ship.Definition.Tier,
+                _ => throw new InvalidOperationException("Patch target is no longer damaged.")
+            }) + (patch.Fast ? 5 : 0);
+        }
+        else dc = (int)Math.Floor((action.Action == "Divert" ? 10 : 15) + 1.5 * ship.Definition.Tier);
         bool success = total >= dc;
         if (success && action.Action == "Hold It Together")
         {
             ship.Systems.HeldSystem = heldSystem;
             ship.Systems.HeldWeaponArc = heldSystem == ShipSystem.WeaponsArray ? action.WeaponArc : null;
         }
+        if (success && action.Action == "Patch" && patch is not null)
+            ship.Systems.AddPatchSuccess(patch);
         if (success && action.Action == "Divert")
         {
             switch (action.Target)

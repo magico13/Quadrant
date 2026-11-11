@@ -160,6 +160,9 @@ public class GameController : ControllerBase
                 diverted = new { engines = s.DivertEngines, weapons = s.DivertWeapons, science = s.DivertScience },
                 heldSystem = s.Systems.HeldSystem,
                 heldWeaponArc = s.Systems.HeldWeaponArc,
+                patches = s.Systems.Patches.Select(p => new { system = p.System, weaponArc = p.WeaponArc, condition = p.Condition,
+                    requiredChecks = p.RequiredChecks, successfulChecks = p.SuccessfulChecks, fast = p.Fast,
+                    appliedAt = p.AppliedAt, active = s.Systems.IsPatchActive(p.System, p.WeaponArc) }),
                 weaponArcs = ShipInstance.StandardWeaponArcs.Where(a => s.OccupiedWeaponArcs.Contains(s.InstalledWeaponArc(a)))
                     .Select(arc => new { arc, installedArc = s.InstalledWeaponArc(arc),
                         condition = s.Systems.GetWeaponArc(s.InstalledWeaponArc(arc)),
@@ -179,7 +182,22 @@ public class GameController : ControllerBase
                     return new { primaryRole = c.Role, role, ranks = c.Ranks, skills = c.Skills, actionUsed = s.CrewActionsUsed.Contains(i),
                         roleBonus = skill is null ? (int?)null : s.CrewBonus(i, skill, role),
                         scienceBonus = role == "Science Officer" ? engine.GetScienceOfficerCheckBonus(s, i) : (int?)null,
-                        engineeringChances = role == "Engineer" ? new { divert = engine.GetEngineeringSuccessChance(s, i, "Divert"), hold = engine.GetEngineeringSuccessChance(s, i, "Hold It Together") } : null,
+                        engineeringChances = role == "Engineer" ? new { divert = engine.GetEngineeringSuccessChance(s, i, "Divert"), hold = engine.GetEngineeringSuccessChance(s, i, "Hold It Together"),
+                            patchTargets = Enum.GetValues<ShipSystem>().SelectMany(system => system == ShipSystem.WeaponsArray
+                                ? s.OccupiedWeaponArcs.Select(arc => (system, (FiringArc?)arc))
+                                : new[] { (system, (FiringArc?)null) })
+                                .Where(target => target.Item1 == ShipSystem.WeaponsArray
+                                    ? s.Systems.GetWeaponArc(target.Item2!.Value) != SystemCondition.None
+                                    : s.Systems.Get(target.Item1) != SystemCondition.None)
+                                .Select(target => { var progress = s.Systems.GetPatch(target.Item1, target.Item2); return new {
+                                    system = target.Item1, weaponArc = target.Item2,
+                                    standard = engine.GetPatchSuccessChance(s, i, target.Item1, target.Item2, false),
+                                    fast = engine.GetPatchSuccessChance(s, i, target.Item1, target.Item2, true),
+                                    condition = target.Item1 == ShipSystem.WeaponsArray ? s.Systems.GetWeaponArc(target.Item2!.Value) : s.Systems.Get(target.Item1),
+                                    requiredChecks = progress?.RequiredChecks, successfulChecks = progress?.SuccessfulChecks,
+                                    fastSelected = progress?.Fast, alreadyPatched = progress?.AppliedAt is not null,
+                                    canFast = progress is null && (target.Item1 == ShipSystem.WeaponsArray ? s.Systems.GetWeaponArc(target.Item2!.Value) : s.Systems.Get(target.Item1)) != SystemCondition.Glitching
+                                }; }).ToList() } : null,
                         scienceChances = role == "Science Officer" ? new { balance = engine.GetScienceSuccessChance(s, i), targets = state.Ships.Where(t => t.TeamId != s.TeamId && !t.IsDestroyed).ToDictionary(t => t.InstanceId, t => engine.GetScienceSuccessChance(s, i, t)) } : null };
                 }),
                 helmAction = s.Definition.Crew.Count == 0 ? "Pilot" :

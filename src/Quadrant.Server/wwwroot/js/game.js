@@ -32,6 +32,7 @@ let pendingSystemTarget = null; // Local preview; popup confirmation spends an a
 let pendingShieldBalance = null; // Local shield transfer preview until confirmed.
 let pendingDivert = null; // Local Divert selection until confirmed.
 let pendingHold = null; // Local Hold It Together target until confirmed.
+let pendingPatch = null; // Local Patch target/option until the engineer confirms an attempt.
 let refreshGunnery = null; // module-scope handle to the current gunnery refresh fn
 let renderedLogCount = 0;
 
@@ -130,6 +131,7 @@ function render() {
     if (pendingShieldBalance && !canContinueShieldBalancing()) clearShieldBalancing();
     if (pendingDivert && !canContinueDivert()) clearDivert();
     if (pendingHold && !canContinueHold()) clearHold();
+    if (pendingPatch && !canContinuePatch()) clearPatch();
 
     phaseEl.textContent = state.phase === 'CrewSetup' ? 'Crew Setup' : state.phase;
     roundEl.textContent = `Round ${state.round}`;
@@ -182,6 +184,7 @@ function render() {
             renderEngineering();
             if (pendingDivert) renderDivertDialog();
             if (pendingHold) renderHoldDialog();
+            if (pendingPatch) renderPatchDialog();
             break;
         case 'Helm': renderHelm(); break;
         case 'Gunnery': renderGunnery(); break;

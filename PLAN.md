@@ -66,11 +66,11 @@ Server listens on port **5180**. Ship and weapon definitions are loaded from JSO
 
 ### Crew Actions & Stunts
 
-Already implemented: Fly, all seven core stunts (Back Off, Barrel Roll, Evade, Flip and Burn, Flyby, Slide, Turn In Place), Divert, Hold It Together, Shoot, Balance, Target System, Glide and Snap Shot. Crew roles and action tracking exist, and some push restrictions are enforced; audit these implementations as the remaining rules are added.
+Already implemented: Fly, all seven core stunts (Back Off, Barrel Roll, Evade, Flip and Burn, Flyby, Slide, Turn In Place), Divert, Hold It Together, Patch, Shoot, Balance, Target System, Glide and Snap Shot. Crew roles and action tracking exist, and some push restrictions are enforced; audit these implementations as the remaining rules are added.
 
 - [x] **Maneuver.** Preview additional destinations and facings; attempting a restricted move consumes the pilot action, disables stunts, and rolls to reduce distance between turns by 1. A failed check leaves normal movement available.
 - [ ] **Captain actions.** Add Demand, Encourage and Taunt, then Orders and Moving Speech once advanced crew prerequisites and Resolve are available. Track check bonuses, timed penalties and per-combat limits. Include available captain actions in the Gunnery auto-end decision so a captain can act after the ship fires.
-- [ ] **Engineer actions.** Add Patch, including pooled successful actions and temporary system-condition effects, then Overpower and Quick Fix. Divert already restores shields; system patching is distinct from hull repair.
+- [ ] **Engineer actions.** Add Overpower and Quick Fix. Patch tracks pooled successful checks across rounds, can trade +5 DC for one fewer required success, and temporarily reduces a system's effective condition; further critical damage removes the patch. Divert already restores shields; system patching is distinct from hull repair.
 - [ ] **Gunner actions.** Add Fire at Will, then Broadside and Precise Targeting. Support multiple shots within one crew action and enforce per-weapon firing limits.
 - [ ] **Advanced pilot actions.** Add Full Power and Audacious Gambit after movement parameters and Resolve are available.
 - [ ] **Science officer actions.** Add Lock On and Improve Countermeasures with their rank and Resolve requirements. Scan is deferred until after multiplayer, as described above.

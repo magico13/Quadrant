@@ -16,12 +16,14 @@ const ShipSchematic = (() => {
             || (ship.damagedSystems || []).find(s => s.system === system);
         const condition = conditions.includes(entry?.condition) ? entry.condition : 'None';
         const effective = conditions.includes(entry?.effectiveCondition) ? entry.effectiveCondition : condition;
-        return { condition, effective };
+        const installedArc = system === 'WeaponsArray' ? (ship.weaponArcs || []).find(s => s.arc === arc)?.installedArc : null;
+        const patched = (ship.patches || []).some(p => p.active && p.system === system && (p.weaponArc || null) === (installedArc || null));
+        return { condition, effective, patched };
     }
 
     function effects(ship, system, arc = null) {
         if (system === 'WeaponsArray' && arc === 'AllArcs') return `Turrets use the condition of the arc they fire through. ${(ship.weaponArcs || []).map(a => `${a.arc}: ${a.condition === 'None' ? 'Healthy' : a.condition}${a.condition !== a.effectiveCondition ? ` (held: ${a.effectiveCondition === 'None' ? 'Healthy' : a.effectiveCondition})` : ''}`).join('; ')}.`;
-        const { condition, effective } = status(ship, system, arc);
+        const { condition, effective, patched } = status(ship, system, arc);
         const scope = system === 'WeaponsArray' && arc ? `gunnery actions using the ${arc.toLowerCase()} array, including turret shots through that arc` : scopes[system];
         let text = effective === 'None' ? `No damage penalty to ${scope}.`
             : effective === 'Wrecked' ? `Automatic failure for ${scope}.`
@@ -33,7 +35,7 @@ const ShipSchematic = (() => {
         }
         if (system === 'Sensors' && ['Malfunctioning', 'Wrecked'].includes(effective)) text += ' Target System (Push) is unavailable.';
         if (system === 'Engines' && ['Malfunctioning', 'Wrecked'].includes(effective)) text += ' Pilot stunts are unavailable.';
-        if (condition !== effective) text += ` Hold It Together: ${condition} damage currently acts as ${effective === 'None' ? 'Healthy' : effective}.`;
+        if (condition !== effective) text += ` ${patched ? 'Patched' : 'Hold It Together'}: ${condition} damage currently acts as ${effective === 'None' ? 'Healthy' : effective}.`;
         return text;
     }
 
@@ -83,23 +85,26 @@ const ShipSchematic = (() => {
         const balancing = options.mode === 'balance';
         const diverting = options.mode === 'divert';
         const holding = options.mode === 'hold';
+        const patching = options.mode === 'patch';
         if (inspectedShip !== ship.id) { inspectedShip = ship.id; selectedSystem = 'PowerCore'; selectedArc = null; }
         const component = (system, label, x, y, extra = '', arc = null, actionArc = arc) => {
             const { condition, effective } = status(ship, system, arc);
             const diverted = ship.diverted?.[{ Engines: 'engines', Sensors: 'science', WeaponsArray: 'weapons' }[system]];
             const target = system === 'Sensors' ? 'Science' : system === 'WeaponsArray' ? 'Weapons' : system;
             const selected = targeting ? options.selectedSystem === system : diverting ? options.selectedTarget === target
-                : holding ? options.selectedSystem === system && (system !== 'WeaponsArray' || options.selectedArc === arc)
+                : holding || patching ? options.selectedSystem === system && (system !== 'WeaponsArray' || options.selectedArc === arc)
                     : selectedSystem === system && selectedArc === arc;
-            const holdSelectable = holding && condition !== 'None' && (system !== 'WeaponsArray' || (!!arc && arc !== 'AllArcs'));
+            const holdSelectable = holding && effective !== 'None' && (system !== 'WeaponsArray' || (!!arc && arc !== 'AllArcs'));
+            const patchSelectable = patching && condition !== 'None' && (system !== 'WeaponsArray' || (!!arc && arc !== 'AllArcs')) &&
+                !(ship.patches || []).some(p => p.system === system && p.weaponArc === (system === 'WeaponsArray' ? actionArc : null) && p.active);
             const title = targeting ? targetingEffects(system, arc) : holding && holdSelectable
                 ? holdPreview(ship, system, arc).detail : effects(ship, system, arc);
-            return `<button type="button" class="schematic-component condition-${condition.toLowerCase()} ${extra} ${holding ? 'hold-selectable' : ''}" style="--x:${x};--y:${y}" data-system="${system}" data-weapon-arc="${arc || ''}" data-action-weapon-arc="${actionArc || ''}" aria-pressed="${selected}" title="${escape(title)}" ${holding && !holdSelectable ? 'disabled' : ''}>
+            return `<button type="button" class="schematic-component condition-${condition.toLowerCase()} ${extra} ${holding || patching ? 'hold-selectable' : ''}" style="--x:${x};--y:${y}" data-system="${system}" data-weapon-arc="${arc || ''}" data-action-weapon-arc="${actionArc || ''}" aria-pressed="${selected}" title="${escape(title)}" ${(holding && !holdSelectable) || (patching && !patchSelectable) ? 'disabled' : ''}>
                 <span>${escape(label)}</span><strong>${arc === 'AllArcs' ? 'By firing arc' : condition === 'None' ? 'Healthy' : condition}</strong>
-                ${condition !== effective ? `<small>Held: ${effective === 'None' ? 'Healthy' : effective}</small>` : ''}
+                ${condition !== effective ? `<small>${status(ship, system, arc).patched ? 'Patched' : 'Held'}: ${effective === 'None' ? 'Healthy' : effective}</small>` : ''}
                 ${diverted ? '<small>Power diverted</small>' : ''}</button>`;
         };
-        const mounts = holding
+        const mounts = holding || patching
             ? (ship.weaponArcs || []).map(entry => {
                 const position = { Forward: [50, 17], Port: [17, 50], Starboard: [83, 50], Aft: [50, 83] }[entry.arc];
                 return position ? component('WeaponsArray', `${entry.arc} weapons`, ...position, 'schematic-mount', entry.arc, entry.installedArc) : '';
@@ -201,8 +206,8 @@ const ShipSchematic = (() => {
                 ${ship.barrelRollActive ? '<div class="schematic-hint">Barrel Roll active: port and starboard shields are swapped.</div>' : ''}
             </div>`;
         }
-        return `<div class="ship-blueprint ${holding ? 'hold-blueprint' : ''}">
-            <div class="blueprint-caption">${holding ? 'HOLD IT TOGETHER · FORWARD ↑' : 'SHIP SCHEMATIC · FORWARD ↑'}</div>
+        return `<div class="ship-blueprint ${holding || patching ? 'hold-blueprint' : ''}">
+            <div class="blueprint-caption">${holding ? 'HOLD IT TOGETHER' : patching ? 'PATCH SYSTEM' : 'SHIP SCHEMATIC'} · FORWARD ↑</div>
             <div class="schematic-stage">
                 <svg class="schematic-drawing" viewBox="0 0 620 570" aria-hidden="true">
                     <g class="schematic-shield-lines">${shieldArcs}</g>
@@ -222,7 +227,7 @@ const ShipSchematic = (() => {
             <div class="schematic-legend"><span>● Healthy</span><span class="condition-glitching">● Glitching</span><span class="condition-malfunctioning">● Malfunctioning</span><span class="condition-wrecked">● Wrecked</span></div>
             <div class="schematic-effect" aria-live="polite"></div>
             ${ship.barrelRollActive ? '<div class="schematic-hint">Barrel Roll active: port and starboard shields and weapon arcs are swapped.</div>' : ''}
-            <div class="hint schematic-hint">${holding ? 'Select a damaged system or weapon arc to preview the condition and penalties if held.' : targeting ? 'Choose a system. Any weapon component selects Weapons; the affected arc is determined randomly.' : balancing ? 'Select a source and destination shield arc. Adjust the transfer in the sidebar.' : 'Hover, focus or click a component for its effects. Weapon damage is tracked by arc; turrets use their firing arc.'}</div>
+            <div class="hint schematic-hint">${holding ? 'Select a damaged system or weapon arc.' : patching ? 'Select a damaged system or weapon arc.' : targeting ? 'Choose a system. Any weapon component selects Weapons; the affected arc is determined randomly.' : balancing ? 'Select a source and destination shield arc. Adjust the transfer in the sidebar.' : 'Hover, focus or click a component for its effects. Weapon damage is tracked by arc; turrets use their firing arc.'}</div>
         </div>`;
     }
 
@@ -231,6 +236,7 @@ const ShipSchematic = (() => {
         const balancing = options.mode === 'balance';
         const diverting = options.mode === 'divert';
         const holding = options.mode === 'hold';
+        const patching = options.mode === 'patch';
         let targetSelection = options.selectedSystem || options.selectedTarget || null;
         let targetSelectionArc = options.selectedArc || null;
         const buttons = root.querySelectorAll('[data-system]');
@@ -248,13 +254,13 @@ const ShipSchematic = (() => {
                 panel.replaceChildren(heading, detail);
                 return;
             }
-            if (holding && system) {
+            if ((holding || patching) && system) {
                 const preview = holdPreview(ship, system, arc);
                 const panel = root.querySelector('.schematic-effect');
                 const heading = document.createElement('strong');
                 const detail = document.createElement('span');
-                heading.textContent = preview.heading;
-                detail.textContent = preview.detail;
+                heading.textContent = patching ? `${arc ? `${arc} ` : ''}${names[system]}: ${status(ship, system, arc).condition}` : preview.heading;
+                detail.textContent = patching ? options.patchDescription?.(system, arc) || 'Choose a patch option and confirm an Engineering check.' : preview.detail;
                 panel.replaceChildren(heading, detail);
                 return;
             }
@@ -279,12 +285,12 @@ const ShipSchematic = (() => {
                     heading.textContent = 'Divert Power';
                     detail.textContent = 'Choose Weapons, Engines, Science · Sensors, or shield quadrants on the ship.';
                     panel.append(heading, detail);
-                } else if (holding) {
+                } else if (holding || patching) {
                     const panel = root.querySelector('.schematic-effect');
                     const heading = document.createElement('strong');
                     const detail = document.createElement('span');
-                    heading.textContent = 'Hold It Together';
-                    detail.textContent = 'Select a damaged system or weapon arc to preview the improved condition and penalties.';
+                    heading.textContent = patching ? 'Patch' : 'Hold It Together';
+                    detail.textContent = patching ? 'Choose a damaged system to patch.' : 'Choose a damaged system to hold together.';
                     panel.replaceChildren(heading, detail);
                 } else {
                     root.querySelector('.schematic-effect').textContent = 'Select a component, then confirm the action in the popup.';
@@ -315,8 +321,8 @@ const ShipSchematic = (() => {
             const system = diverting
                 ? targetSelection === 'Science' ? 'Sensors' : targetSelection === 'Weapons' ? 'WeaponsArray' : targetSelection
                 : targetSelection;
-            describe(targeting || diverting || holding ? system : selectedSystem,
-                targeting || holding ? targetSelectionArc : selectedArc);
+            describe(targeting || diverting || holding || patching ? system : selectedSystem,
+                targeting || holding || patching ? targetSelectionArc : selectedArc);
         };
         buttons.forEach(button => {
             button.addEventListener('mouseenter', () => describe(button.dataset.system, button.dataset.weaponArc || null));
@@ -339,7 +345,7 @@ const ShipSchematic = (() => {
                     options.onTargetSelect?.(targetSelection);
                     return;
                 }
-                if (holding) {
+                if (holding || patching) {
                     targetSelection = button.dataset.system;
                     targetSelectionArc = button.dataset.weaponArc || null;
                     buttons.forEach(b => b.setAttribute('aria-pressed', String(b === button)));
@@ -395,8 +401,8 @@ const ShipSchematic = (() => {
             panel.replaceChildren(title, detail);
             return;
         }
-        describe(targeting || diverting || holding ? targetSelection : selectedSystem,
-            targeting || holding ? targetSelectionArc : selectedArc);
+        describe(targeting || diverting || holding || patching ? targetSelection : selectedSystem,
+            targeting || holding || patching ? targetSelectionArc : selectedArc);
     }
 
     return { render, bind };
