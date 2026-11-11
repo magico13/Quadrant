@@ -415,3 +415,10 @@ function addLog(phase, message) {
         });
     }
 })();
+
+const sidebarToggle = document.getElementById('btn-sidebar');
+sidebarToggle.addEventListener('click', () => {
+    const open = document.getElementById('sidebar').classList.toggle('mobile-open');
+    sidebarToggle.setAttribute('aria-expanded', String(open));
+    sidebarToggle.textContent = open ? 'Hide panel' : 'Show panel';
+});

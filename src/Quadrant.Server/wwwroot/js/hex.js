@@ -102,12 +102,16 @@ class HexGrid {
         this._panStartY = 0;
 
         this._resize();
-        window.addEventListener('resize', () => this._resize());
+        new ResizeObserver(() => { this._resize(); this.draw(); }).observe(canvas);
         canvas.addEventListener('mousemove', (e) => this._onMove(e));
         canvas.addEventListener('mousedown', (e) => this._onDown(e));
         canvas.addEventListener('mouseup', (e) => this._onUp(e));
         canvas.addEventListener('click', (e) => this._onClick(e));
         canvas.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
+        canvas.addEventListener('touchstart', (e) => this._onTouchStart(e), { passive: false });
+        canvas.addEventListener('touchmove', (e) => this._onTouchMove(e), { passive: false });
+        canvas.addEventListener('touchend', (e) => this._onTouchEnd(e), { passive: false });
+        canvas.addEventListener('touchcancel', (e) => { e.preventDefault(); this._touch = null; });
     }
 
     _resize() {
@@ -148,6 +152,64 @@ class HexGrid {
     }
 
     // --- Pan & Zoom handlers ---
+
+    _touchPoints(touches) {
+        const rect = this.canvas.getBoundingClientRect();
+        return Array.from(touches, t => ({ x: t.clientX - rect.left, y: t.clientY - rect.top }));
+    }
+
+    _onTouchStart(e) {
+        e.preventDefault();
+        const points = this._touchPoints(e.touches);
+        if (!this._touch) this._touch = { moved: false, start: points[0] };
+        if (points.length > 1) this._touch.moved = true;
+        this._touch.points = points;
+    }
+
+    _onTouchMove(e) {
+        e.preventDefault();
+        if (!this._touch) return;
+        const points = this._touchPoints(e.touches);
+        const previous = this._touch.points;
+        if (points.length !== previous.length || !points.length) {
+            this._touch.points = points;
+            return;
+        }
+        if (points.length >= 2) {
+            const mid = p => ({ x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2 });
+            const distance = p => Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+            const oldMid = mid(previous), newMid = mid(points);
+            const oldDistance = distance(previous);
+            const newZoom = Math.max(0.3, Math.min(5, this.zoom * (oldDistance ? distance(points) / oldDistance : 1)));
+            const scale = newZoom / this.zoom;
+            this.panX = newMid.x - (oldMid.x - this.panX) * scale;
+            this.panY = newMid.y - (oldMid.y - this.panY) * scale;
+            this.zoom = newZoom;
+            this._touch.moved = true;
+        } else {
+            const dx = points[0].x - previous[0].x, dy = points[0].y - previous[0].y;
+            if (Math.hypot(points[0].x - this._touch.start.x, points[0].y - this._touch.start.y) > 6) this._touch.moved = true;
+            this.panX += dx;
+            this.panY += dy;
+        }
+        this._touch.points = points;
+        this.draw();
+    }
+
+    _onTouchEnd(e) {
+        e.preventDefault();
+        if (!this._touch) return;
+        if (e.touches.length) {
+            this._touch.points = this._touchPoints(e.touches);
+            this._touch.moved = true;
+        } else {
+            if (!this._touch.moved && e.changedTouches.length) {
+                this._wasDrag = false;
+                this._onClick(e.changedTouches[0]);
+            }
+            this._touch = null;
+        }
+    }
 
     _onDown(e) {
         if (e.button !== 0) return;

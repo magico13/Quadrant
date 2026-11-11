@@ -939,3 +939,30 @@ select option { background: var(--panel); color: var(--text); }
         max-height: calc(50dvh - 48px);
     }
 }
+
+#btn-sidebar { display: none; }
+#hex-canvas { touch-action: none; }
+
+@media (max-width: 720px) {
+    #app { height: 100dvh; }
+    #topbar { flex-wrap: wrap; gap: 6px 10px; padding: 8px; }
+    #topbar h1 { font-size: 16px; letter-spacing: 3px; margin-right: auto; }
+    #phase-indicator, #round-indicator { padding: 4px 7px; }
+    #btn-sidebar { display: inline-block; }
+    #game-area { position: relative; }
+    #sidebar {
+        display: none;
+        position: absolute;
+        inset: 0 0 0 auto;
+        width: min(320px, 90%);
+        z-index: 10;
+        box-shadow: 0 0 20px #0009;
+    }
+    #sidebar.mobile-open { display: flex; }
+    #setup-overlay { padding: 8px; }
+    .setup-inner { max-height: calc(100dvh - 16px); padding: 16px; }
+    .setup-actions { flex-wrap: wrap; }
+    #ship-details, #damage-report { top: 8px; max-height: calc(100dvh - 16px); }
+    #ship-details:not(.hidden):has(+ #damage-report:not(.hidden)) { max-height: calc(50dvh - 16px); }
+    #ship-details:not(.hidden) + #damage-report { top: 50dvh; max-height: calc(50dvh - 8px); }
+}
