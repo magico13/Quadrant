@@ -1,6 +1,9 @@
 services:
   server:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-development}
     environment:
       ASPNETCORE_ENVIRONMENT: Development
     volumes:

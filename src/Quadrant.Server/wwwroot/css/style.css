@@ -46,6 +46,15 @@ html, body {
     font-weight: 700;
 }
 
+#build-version {
+    font-size: 10px;
+    letter-spacing: 0;
+    color: var(--text-dim);
+    text-shadow: none;
+    font-weight: 400;
+    vertical-align: middle;
+}
+
 #phase-indicator, #round-indicator {
     padding: 4px 14px;
     border-radius: 4px;

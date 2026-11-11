@@ -16,6 +16,8 @@ Then open <http://localhost:5180>. The named volume keeps saved games when the c
 
 For a deployment using the published Compose image, `scripts/update-image.sh` pulls the latest image from GHCR and recreates the server only when its image has changed. It preserves the named data volume. It deliberately ignores the development override; do not use it for a source-built development server. The cron user needs Docker access and, if the image is private, an existing `docker login ghcr.io` session.
 
+The running build's identifier is shown beside the app name and is available as `build` from `/api/health`. GitHub Actions embeds the full commit SHA in published images. Local source builds default to `development`; set `GIT_COMMIT` when building if you want another label, such as `GIT_COMMIT=$(git rev-parse --short HEAD) docker compose up --build`.
+
 On the Docker LXC at `192.168.68.94`, copy the update script from this checkout (run from the repository directory on your local machine):
 
 ```sh

@@ -1,4 +1,11 @@
 // Quadrant client bootstrap: shared state, REST calls, phase routing, and map event dispatch.
+fetch('/api/health').then(response => response.ok ? response.json() : null).then(health => {
+    const version = document.getElementById('build-version');
+    if (health?.build && health.build !== 'unknown' && version) {
+        version.textContent = health.build;
+        version.title = `Build ${health.build}`;
+    }
+}).catch(() => {});
 // Phase renderers and ship UI live in the sibling game-*.js classic scripts.
 
 const canvas = document.getElementById('hex-canvas');

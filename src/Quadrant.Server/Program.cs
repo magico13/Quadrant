@@ -62,6 +62,15 @@ app.MapControllers();
 app.MapFallbackToFile("index.html");
 
 // Health check.
-app.MapGet("/api/health", () => Results.Ok(new { status = "ok", activeGames = app.Services.GetRequiredService<SessionManager>().Count }));
+var buildCommit = Environment.GetEnvironmentVariable("QUADRANT_BUILD_COMMIT") ?? "unknown";
+if (buildCommit.Length > 7)
+    buildCommit = buildCommit[..7];
+
+app.MapGet("/api/health", () => Results.Ok(new
+{
+    status = "ok",
+    build = buildCommit,
+    activeGames = app.Services.GetRequiredService<SessionManager>().Count
+}));
 
 app.Run();

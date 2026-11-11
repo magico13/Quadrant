@@ -14,4 +14,6 @@ WORKDIR /app
 COPY --from=build /app/publish .
 EXPOSE 5180
 ENV ASPNETCORE_URLS=http://+:5180
+ARG GIT_COMMIT=unknown
+ENV QUADRANT_BUILD_COMMIT=${GIT_COMMIT}
 ENTRYPOINT ["dotnet", "Quadrant.Server.dll"]
