@@ -59,12 +59,33 @@ function renderCatalogList() {
     });
 }
 
+// Combine the lowest matching tiers first, using trios before pairs. Repeating
+// this also combines equivalent ships produced by earlier groups.
+function teamPower(tiers) {
+    if (!tiers.length) return null;
+    const ships = [...tiers];
+    while (true) {
+        ships.sort((a, b) => a - b);
+        const index = ships.findIndex((tier, i) => i + 1 < ships.length && tier === ships[i + 1]);
+        if (index < 0) break;
+        const tier = ships[index];
+        const count = ships[index + 2] === tier ? 3 : 2;
+        ships.splice(index, count, tier + count);
+    }
+    ships.sort((a, b) => b - a);
+    const highest = ships[0];
+    const close = ships.slice(1).filter(tier => highest - tier <= 2);
+    if (close.length) return highest + close.length;
+    return highest + (ships.length > 1 && ships.slice(1).reduce((sum, tier) => sum + tier, 0) >= highest ? 1 : 0);
+}
+
 function renderTeamColumns() {
     document.getElementById('team-list').innerHTML = fleet.map((ships, team) => `
         <div class="team-col">
             <h3><span class="roster-dot" style="background:${teamColor(team)}"></span> Team ${team + 1}
                 ${team >= 2 ? `<button class="ts-remove" data-remove-team="${team}" title="Remove team">×</button>` : ''}
             </h3>
+            <div class="team-power" title="Estimated strength from the multiple enemy ships encounter rules">Power: ${ships.length ? formatTier(teamPower(ships.map(id => catalog.find(c => c.id === id).tier))) : '—'}</div>
             <div class="team-ships">${ships.length ? ships.map((id, i) => {
                 const ship = catalog.find(c => c.id === id);
                 return `<div class="team-ship-row"><span class="ts-name">${ship ? ship.name : id}</span>
