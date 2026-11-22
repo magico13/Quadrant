@@ -8,7 +8,7 @@ public sealed record CombatEvent(string Phase, string ShipId, string Message)
     public static CombatEvent Info(string phase, string shipId, string msg) => new(phase, shipId, msg);
 }
 
-public sealed record PendingHitSnapshot(string AttackerId, string TargetId, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant, ShipSystem? TargetedSystem = null, long Order = 0);
+public sealed record PendingHitSnapshot(string AttackerId, string TargetId, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant, ShipSystem? TargetedSystem = null, long Order = 0, string? FiringId = null);
 public sealed record PendingLaunchSnapshot(TrackingProjectile Projectile, AttackCheckResult Check, long Order = 0);
 public sealed record PendingProjectileImpactSnapshot(TrackingProjectile Projectile, int Roll, int CheckBonus, int Defense, Hex ImpactFrom, long Order = 0);
 public sealed record PointDefenseUsedSnapshot(string ShipId, int WeaponIndex);
@@ -45,7 +45,7 @@ public sealed class CombatEngine
 {
     private readonly GameState _state;
     private readonly IDiceRoller _dice;
-    private readonly List<(ShipInstance Attacker, ShipInstance Target, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant, ShipSystem? TargetedSystem, long Order)> _pendingHits = [];
+    private readonly List<(ShipInstance Attacker, ShipInstance Target, Weapon Weapon, AttackCheckResult Check, Quadrant Quadrant, ShipSystem? TargetedSystem, long Order, string? FiringId)> _pendingHits = [];
     private readonly List<(TrackingProjectile Projectile, AttackCheckResult Check, long Order)> _pendingLaunches = [];
     private readonly List<PendingProjectileImpactSnapshot> _pendingProjectileImpacts = [];
     private readonly HashSet<(string ShipId, int WeaponIndex)> _firedWeapons = [];
@@ -84,6 +84,14 @@ public sealed class CombatEngine
             .Select(x => x.index).ToList();
     }
 
+    public IReadOnlyList<string> GetFreeArrayTargets(int weaponIndex)
+    {
+        var defender = FreeAttackShipId is null ? null : _state.GetShip(FreeAttackShipId);
+        var mover = _state.CurrentActor;
+        if (defender is null || mover is null || !GetFreeAttackWeapons().Contains(weaponIndex) || !defender.Weapons[weaponIndex].Array) return [];
+        return ArrayTargets(defender, defender.Weapons[weaponIndex]).Where(s => s != mover).Prepend(mover).Select(s => s.InstanceId).ToList();
+    }
+
     public string? ResolveFreeAttack(int? weaponIndex, int? gunnerIndex = null)
     {
         var defender = FreeAttackShipId is null ? null : _state.GetShip(FreeAttackShipId);
@@ -97,6 +105,13 @@ public sealed class CombatEngine
             var mountIndices = LinkedMountIndices(defender, wi);
             var weapon = CombineLinkedWeapon(defender, wi, mountIndices);
             foreach (var index in mountIndices) defender.ConsumeWeaponUse(index);
+            if (weapon.Array)
+            {
+                ResolveArrayFreeAttack(defender, target, weapon, gunner);
+                FreeAttackShipId = null;
+                ContinueCommittedMove();
+                return null;
+            }
             int bonus = defender.CrewBonus(gunner, "gunnery", "Gunner") + defender.WeaponActionPenalty(weapon, target.Position) + defender.Systems.PowerCoreGlobalPenalty;
             int roll = _dice.RollD20();
             int total = roll + bonus;
@@ -106,7 +121,7 @@ public sealed class CombatEngine
             {
                 bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
                 var before = DamageState.Capture(target);
-                int rawDamage = weapon.Damage.Roll(_dice, defender.DivertWeapons);
+                int rawDamage = weapon.Damage.Roll(_dice);
                 var damage = CombatResolver.ApplyDamage(target, Quadrant.Aft, rawDamage, roll, _dice);
                 RecordDamage(defender.InstanceId, weapon.Name, target, Quadrant.Aft, rawDamage, damage.ShieldDamage,
                     damage.HullDamage, before, damage.CriticalEffects);
@@ -119,6 +134,36 @@ public sealed class CombatEngine
         FreeAttackShipId = null;
         ContinueCommittedMove();
         return null;
+    }
+
+    private void ResolveArrayFreeAttack(ShipInstance defender, ShipInstance mover, Weapon weapon, int gunner)
+    {
+        // The moving ship is in the defender's hex, so the special free-attack
+        // rule supplies its arc and aft quadrant. Other ships use normal geometry.
+        var targets = ArrayTargets(defender, weapon).Where(s => s != mover).Prepend(mover).ToList();
+        var hits = new List<(ShipInstance Target, int Roll, Quadrant Quadrant)>();
+        foreach (var target in targets)
+        {
+            int bonus = defender.CrewBonus(gunner, "gunnery", "Gunner") + defender.WeaponActionPenalty(weapon, target.Position, weapon.Arc)
+                + defender.Systems.PowerCoreGlobalPenalty - 4;
+            if (target != mover) bonus += weapon.RangePenalty(defender.Position.DistanceTo(target.Position)) + weapon.ArcPenalty(defender.AngleFromFacing(target.Position));
+            int roll = _dice.RollD20();
+            int total = roll + bonus;
+            bool hit = roll == 20 || (roll != 1 && total >= target.CurrentAC);
+            LastEvents.Add(new CombatEvent("Helm", defender.InstanceId, $"{ShipLogName(defender)} → {ShipLogName(target)} · {weapon.Name} (free attack): {CombatResolver.FormatCheck(roll, bonus, total)} vs AC {target.CurrentAC} — {(hit ? "HIT" : "MISS")}."));
+            if (hit) hits.Add((target, roll, target == mover ? Quadrant.Aft : target.QuadrantOf(defender.Position)));
+        }
+        if (hits.Count == 0) return;
+        int rawDamage = weapon.Damage.Roll(_dice);
+        foreach (var (target, roll, quadrant) in hits)
+        {
+            bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
+            var before = DamageState.Capture(target);
+            var damage = CombatResolver.ApplyDamage(target, quadrant, rawDamage, roll, _dice);
+            RecordDamage(defender.InstanceId, weapon.Name, target, quadrant, rawDamage, damage.ShieldDamage, damage.HullDamage, before, damage.CriticalEffects);
+            LastEvents.Add(new CombatEvent("Helm", defender.InstanceId, $"{ShipLogName(defender)} → {ShipLogName(target)} · {weapon.Name} (free attack): {damage.Description}."));
+            LogShipStatusChange(target, wasDisabled, wasDestroyed, "Helm");
+        }
     }
 
     private void ContinueCommittedMove()
@@ -178,7 +223,7 @@ public sealed class CombatEngine
     public GameState State => _state;
 
     public CombatEngineSnapshot CaptureSnapshot() => new(
-        _pendingHits.Select(h => new PendingHitSnapshot(h.Attacker.InstanceId, h.Target.InstanceId, h.Weapon, h.Check, h.Quadrant, h.TargetedSystem, h.Order)).ToList(),
+        _pendingHits.Select(h => new PendingHitSnapshot(h.Attacker.InstanceId, h.Target.InstanceId, h.Weapon, h.Check, h.Quadrant, h.TargetedSystem, h.Order, h.FiringId)).ToList(),
         _pendingLaunches.Select(l => new PendingLaunchSnapshot(l.Projectile, l.Check, l.Order)).ToList(),
         _firedWeapons.Select(w => new FiredWeaponSnapshot(w.ShipId, w.WeaponIndex)).ToList(),
         _targetArcChoices.Select(a => new TargetArcSnapshot(a.Key.ShipId, a.Key.TargetId, a.Value)).ToList(),
@@ -193,7 +238,7 @@ public sealed class CombatEngine
     {
         foreach (var h in snapshot.PendingHits)
             _pendingHits.Add((_state.GetShip(h.AttackerId) ?? throw new InvalidDataException("Missing attacker in saved game."),
-                _state.GetShip(h.TargetId) ?? throw new InvalidDataException("Missing target in saved game."), h.Weapon, h.Check, h.Quadrant, h.TargetedSystem, h.Order));
+                _state.GetShip(h.TargetId) ?? throw new InvalidDataException("Missing target in saved game."), h.Weapon, h.Check, h.Quadrant, h.TargetedSystem, h.Order, h.FiringId));
         foreach (var l in snapshot.PendingLaunches) _pendingLaunches.Add((l.Projectile, l.Check, l.Order));
         _pendingProjectileImpacts.AddRange(snapshot.PendingImpacts ?? []);
         _nextAttackOrder = _pendingHits.Select(h => h.Order).Concat(_pendingLaunches.Select(l => l.Order)).Concat(_pendingProjectileImpacts.Select(i => i.Order)).DefaultIfEmpty(0).Max();
@@ -553,6 +598,7 @@ public sealed class CombatEngine
             return null;
         }
         var weapon = ship.Weapons[action.WeaponIndex];
+        if (weapon.Array) return ApplyArrayFire(ship, action, choice);
         var mountIndices = LinkedMountIndices(ship, action.WeaponIndex);
         var attackWeapon = CombineLinkedWeapon(ship, action.WeaponIndex, mountIndices);
 
@@ -672,7 +718,7 @@ public sealed class CombatEngine
             return check with { Description = $"{check.Description} Missile acquired; it moves at the end of Gunnery." };
         }
 
-        _pendingHits.Add((ship, target, attackWeapon, check, flyby ? target.ShieldQuadrantFor(action.TargetQuadrant!.Value) : target.QuadrantOf(ship.Position), null, ++_nextAttackOrder));
+        _pendingHits.Add((ship, target, attackWeapon, check, flyby ? target.ShieldQuadrantFor(action.TargetQuadrant!.Value) : target.QuadrantOf(ship.Position), null, ++_nextAttackOrder, null));
         return check with { Description = $"{check.Description} Damage effects apply at the end of Gunnery." };
     }
 
@@ -681,6 +727,56 @@ public sealed class CombatEngine
     /// that submit a whole turn at once. Interactive play uses ApplyFire once per
     /// weapon, then EndGunneryTurn when targeting choices are complete.
     /// </summary>
+    private List<ShipInstance> ArrayTargets(ShipInstance ship, Weapon weapon) => _state.Ships
+        .Where(target => target != ship && !target.IsDestroyed && weapon.CanTarget(ship.Position.DistanceTo(target.Position), ship.AngleFromFacing(target.Position)))
+        .OrderBy(target => ship.Position.DistanceTo(target.Position)).ThenBy(target => target.InstanceId, StringComparer.Ordinal).ToList();
+
+    private AttackCheckResult? ApplyArrayFire(ShipInstance ship, FireAction action, GunneryChoice choice)
+    {
+        int weaponIndex = action.WeaponIndex;
+        var weapon = ship.Weapons[weaponIndex];
+        // The current fleet has fixed-arc direct-fire arrays. Other configurations
+        // require an explicit choice of firing arc before they can be supported.
+        if (weapon.Type != WeaponType.DirectFire || weapon.Arc == FiringArc.AllArcs || weapon.BroadArc) return null;
+        var mounts = LinkedMountIndices(ship, weaponIndex);
+        if (mounts.Any(i => !ship.HasWeaponUses(i) || _firedWeapons.Contains((ship.InstanceId, i)))) return null;
+        var targets = ArrayTargets(ship, weapon);
+        var flybyTarget = _state.GetShip(ship.FlybyTargetId ?? "");
+        bool flyby = flybyTarget is not null && IsFlybyTarget(ship, flybyTarget) && FlybyArcAllowed(ship, weapon) && weapon.CanFireAtCloseRange;
+        if (flyby)
+        {
+            if (action.TargetQuadrant is null || !Enum.IsDefined(action.TargetQuadrant.Value)) return null;
+            if (!targets.Contains(flybyTarget!)) targets.Add(flybyTarget!);
+            targets = targets.OrderBy(t => t == flybyTarget ? 1 : ship.Position.DistanceTo(t.Position)).ThenBy(t => t.InstanceId, StringComparer.Ordinal).ToList();
+        }
+        else if (action.TargetQuadrant is not null) return null;
+        if (targets.Count == 0 || ship.WeaponActionPenalty(weapon, targets[0].Position, weapon.Arc) == int.MinValue ||
+            (choice.FireAtWill && !CanPushWeapon(ship, weapon, targets[0].Position, weapon.Arc))) return null;
+        foreach (int index in mounts) { _firedWeapons.Add((ship.InstanceId, index)); ship.ConsumeWeaponUse(index); }
+        if (flyby) ship.FlybyFiringArc = weapon.Arc;
+        if (choice.CrewIndex is { } crew)
+        {
+            if (choice.SnapShot) ship.CrewMinorActionsUsed.Add(crew);
+            else if (choice.FireAtWill) { if (--ship.FireAtWillShots[crew] == 0) ship.FireAtWillShots.Remove(crew); }
+            else ship.CrewActionsUsed.Add(crew);
+            ship.GunnerActionTaken = true;
+        }
+        var combined = CombineLinkedWeapon(ship, weaponIndex, mounts);
+        var firingId = Guid.NewGuid().ToString("N");
+        AttackCheckResult? first = null;
+        foreach (var target in targets)
+        {
+            int bonus = (choice.CrewIndex is null ? CombatResolver.ComputeGunnerBonus(ship, weapon, target.Position, weapon.Arc)
+                : choice.Bonus + ship.WeaponActionPenalty(weapon, target.Position, weapon.Arc) + ship.Systems.PowerCoreGlobalPenalty) - 4;
+            bool flybyShot = flyby && target == flybyTarget;
+            var check = CombatResolver.RollAttack(ship, target, combined, _dice, gunnerBonus: bonus, rollDamage: false, flyby: flybyShot, firingArc: weapon.Arc);
+            first ??= check;
+            LastEvents.Add(new CombatEvent("Gunnery", ship.InstanceId, $"{ShipLogName(ship)} → {ShipLogName(target)} · {combined.Name}: {check.Description}"));
+            if (check.IsHit) _pendingHits.Add((ship, target, combined, check, flybyShot ? target.ShieldQuadrantFor(action.TargetQuadrant!.Value) : target.QuadrantOf(ship.Position), null, ++_nextAttackOrder, firingId));
+        }
+        return first;
+    }
+
     public List<AttackResult> ApplyGunneryTurn(IReadOnlyList<FireAction> actions)
     {
         var ship = _state.CurrentActor;
@@ -761,7 +857,7 @@ public sealed class CombatEngine
         if (stunt == "Flyby")
         {
             var routes = _ComputeReachable(flyby: true);
-            if (routes.Count == 0) return MoveValidationResult.Fail("No legal Flyby path crosses one enemy and ends in an unoccupied hex.");
+            if (routes.Count == 0) return MoveValidationResult.Fail("No legal Flyby path crosses an enemy and ends in an unoccupied hex.");
             _stuntMoves = routes.Select(kv => new MoveOption(kv.Key.Pos, kv.Key.Facing, kv.Value)).ToList();
             PendingStunt = stunt;
             return MoveValidationResult.Ok(ship.Position, ship.Facing);
@@ -1183,9 +1279,8 @@ public sealed class CombatEngine
             {
                 if (flyby && moved && enemies.Contains(next.Pos))
                 {
-                    // Friendly crossings are normal movement. Flyby permits
-                    // one enemy entry, with no second entry into an enemy hex.
-                    if (current.Crossed) return;
+                    // The first enemy is the Flyby target; later crossings
+                    // follow normal movement rules and may provoke attacks.
                     next.Crossed = true;
                 }
                 var nextCost = (cost.Exposures + (moved && enemies.Contains(next.Pos) ? 1 : 0), cost.Steps + 1);
@@ -1399,8 +1494,8 @@ public sealed class CombatEngine
                     .Where(pair => pair.First.Position != pair.Second.Position)
                     .SelectMany(pair => _state.Ships.Where(s => s.TeamId != ship.TeamId && !s.IsDestroyed && s.Position == pair.Second.Position))
                     .ToList();
-                if (crossings.Count != 1)
-                    return MoveValidationResult.Fail("Flyby must cross exactly one enemy-occupied hex; friendly crossings are unrestricted.");
+                if (crossings.Count == 0)
+                    return MoveValidationResult.Fail("Flyby must cross an enemy-occupied hex.");
                 var target = crossings[0];
                 int pilot = ship.CrewRoles.IndexOf("Pilot");
                 if (pilot < 0 || ship.CrewActionsUsed.Contains(pilot) ||
@@ -1500,6 +1595,25 @@ public sealed class CombatEngine
             var weapon = ship.Weapons[wi];
             var mountIndices = LinkedMountIndices(ship, wi);
             if (mountIndices.Any(i => !ship.HasWeaponUses(i) || _firedWeapons.Contains((ship.InstanceId, i)))) continue;
+            if (weapon.Array)
+            {
+                if (weapon.Type != WeaponType.DirectFire || weapon.Arc == FiringArc.AllArcs || weapon.BroadArc) continue;
+                var arrayTargets = ArrayTargets(ship, weapon);
+                var flybyTarget = _state.GetShip(ship.FlybyTargetId ?? "");
+                bool flyby = flybyTarget is not null && IsFlybyTarget(ship, flybyTarget) && FlybyArcAllowed(ship, weapon) && weapon.CanFireAtCloseRange;
+                if (flyby && !arrayTargets.Contains(flybyTarget!)) arrayTargets.Add(flybyTarget!);
+                foreach (var target in arrayTargets)
+                {
+                    int penalty = ship.WeaponActionPenalty(weapon, target.Position, weapon.Arc);
+                    if (penalty == int.MinValue || (choice.FireAtWill && !CanPushWeapon(ship, weapon, target.Position, weapon.Arc))) continue;
+                    bool flybyShot = flyby && target == flybyTarget;
+                    int range = flybyShot ? 1 : ship.Position.DistanceTo(target.Position);
+                    int rangePenalty = weapon.RangePenalty(range);
+                    int chance = CombatResolver.HitChancePercent(bonus + penalty + rangePenalty - 4, target.CurrentAC);
+                    options.Add(new TargetOption(CombineLinkedWeapon(ship, wi, mountIndices).Name, target.InstanceId, range, chance, wi, rangePenalty, 0, weapon.Arc, false, false, [], flybyShot));
+                }
+                continue;
+            }
             if (weapon.Type == WeaponType.Tracking && weapon.ProjectileSpeed <= 0) continue;
             foreach (var target in _state.ActiveShips())
             {
@@ -1560,7 +1674,7 @@ public sealed class CombatEngine
         var matching = ship.Weapons.Select((candidate, index) => (candidate, index))
             .Where(x => x.candidate.Type == WeaponType.DirectFire &&
                 x.candidate.LinkedGroup == weapon.LinkedGroup && x.candidate.Arc == weapon.Arc &&
-                x.candidate.BroadArc == weapon.BroadArc &&
+                x.candidate.BroadArc == weapon.BroadArc && x.candidate.Array == weapon.Array &&
                 x.candidate.Name == weapon.Name && x.candidate.Damage == weapon.Damage &&
                 x.candidate.MinRange == weapon.MinRange && x.candidate.RangeIncrement == weapon.RangeIncrement &&
                 x.candidate.LimitedFireUses == weapon.LimitedFireUses)
@@ -1816,6 +1930,7 @@ public sealed class CombatEngine
 
     private void FinishGunneryResolution()
     {
+        var arrayDamage = new Dictionary<string, int>();
         // A newly launched projectile occupies its attack's place only if it reaches
         // the target this round. Existing projectiles impact after this round's shots.
         foreach (var entry in _pendingHits.Select((h, i) => (h.Order, Index: i, Impact: (PendingProjectileImpactSnapshot?)null))
@@ -1843,9 +1958,11 @@ public sealed class CombatEngine
             }
             else
             {
-                var (attacker, target, weapon, check, quadrant, savedTargetedSystem, _) = _pendingHits[entry.Index];
+                var (attacker, target, weapon, check, quadrant, savedTargetedSystem, _, firingId) = _pendingHits[entry.Index];
                 ShipSystem? targetedSystem = savedTargetedSystem ?? (_targetedSystems.Remove((attacker.InstanceId, target.InstanceId), out var chosenSystem) ? chosenSystem : null);
-                int rolledDamage = weapon.Damage.Roll(_dice, attacker.DivertWeapons);
+                int rolledDamage;
+                if (firingId is not null && arrayDamage.TryGetValue(firingId, out int shared)) rolledDamage = shared;
+                else { rolledDamage = weapon.Damage.Roll(_dice, attacker.DivertWeapons); if (firingId is not null) arrayDamage[firingId] = rolledDamage; }
                 bool wasDisabled = target.IsDisabled, wasDestroyed = target.IsDestroyed;
                 var before = DamageState.Capture(target);
                 var damage = CombatResolver.ApplyDamage(target, quadrant, rolledDamage, check.Roll, _dice, targetedSystem);

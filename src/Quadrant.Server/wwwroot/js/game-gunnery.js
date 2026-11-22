@@ -149,7 +149,7 @@ function renderGunnery() {
             }
             const label = w ? `${w.name}${w.arc && w.arc !== 'AllArcs' ? ` (${w.arc}${w.broadArc ? ' + Broad Arc' : ''})` : ''}` : activeWeapon;
             targetInfo.innerHTML = opts.length
-                ? `<span class="hint">Click a highlighted enemy to set ${label}'s target.</span>`
+                ? w?.array ? `<span class="hint">Array: fires at every highlighted ship, including allies (−4 to each check).</span>` : `<span class="hint">Click a highlighted enemy to set ${label}'s target.</span>`
                 : `<span class="hint">${label} has no targets in range.</span>`;
         } else {
             grid.setTargets([]);
@@ -158,8 +158,9 @@ function renderGunnery() {
         }
 
         // Show current assignments.
-        const assigned = activeWeapon !== null && selectedShots.has(activeWeapon)
-            ? [[activeWeapon, selectedShots.get(activeWeapon)]] : [];
+        const assigned = actor.weapons?.[activeWeapon]?.array
+            ? (weapons.get(activeWeapon) || []).map(o => [activeWeapon, o.targetShipId])
+            : activeWeapon !== null && selectedShots.has(activeWeapon) ? [[activeWeapon, selectedShots.get(activeWeapon)]] : [];
         if (assigned.length) {
             targetInfo.innerHTML += `<div class="shot-list">${assigned.map(([widx, tid]) => {
                 const w = actor.weapons?.[widx];
@@ -169,17 +170,19 @@ function renderGunnery() {
                 const penalties = opt ? [opt.rangePenalty && `${opt.rangePenalty} range`, opt.arcPenalty && `${opt.arcPenalty} arc`].filter(Boolean).join(', ') : '';
                 const rangeStr = opt ? ` [${opt.range} hex${opt.range !== 1 ? 'es' : ''}${penalties ? `, ${penalties}` : ''}]` : '';
                 const chance = opt?.arcHitChances?.[selectedTargetArcs.get(tid)] ?? opt?.hitChancePercent;
-                return `<span class="shot-item">${label} → ${t?.name ?? '?'}${chance != null ? ` · ${chance}%` : ''}${rangeStr}</span>`;
+                return `<span class="shot-item">${label} → ${t?.name ?? '?'}${t?.teamId === actor.teamId ? ' (ally)' : ''}${chance != null ? ` · ${chance}%` : ''}${rangeStr}</span>`;
             }).join('')}</div>`;
         }
 
         const targetId = activeWeapon === null ? null : selectedShots.get(activeWeapon);
         const activeOption = activeWeapon === null ? null : (weapons.get(activeWeapon) || []).find(o => o.targetShipId === targetId);
-        if (activeOption?.flyby) {
+        const arrayFlyby = actor.weapons?.[activeWeapon]?.array && (weapons.get(activeWeapon) || []).find(o => o.flyby);
+        if (activeOption?.flyby || arrayFlyby) {
             targetInfo.innerHTML += `<label>Flyby target quadrant <select id="flyby-quadrant">${['Forward', 'Starboard', 'Aft', 'Port'].map(q => `<option value="${q}">${q}</option>`).join('')}</select></label><div class="hint">Effective range: 1 hex. The first shot commits the firing arc for Flyby.</div>`;
         }
         const missingArcChoice = !!activeOption?.arcChoiceRequired && !selectedTargetArcs.has(targetId);
-        grid.setSelectedGunneryTarget(targetId ? actor.id : null, targetId);
+        if (actor.weapons?.[activeWeapon]?.array) grid.setArrayGunneryTargets(actor.id, (weapons.get(activeWeapon) || []).map(o => o.targetShipId));
+        else grid.setSelectedGunneryTarget(targetId ? actor.id : null, targetId);
         fireBtn.disabled = activeWeapon === null || !targetId || fired.has(activeWeapon) || missingArcChoice;
     }
 
@@ -208,7 +211,7 @@ function renderGunnery() {
         const option = (weapons.get(activeWeapon) || []).find(o => o.targetShipId === targetShipId);
         const arc = option?.arcChoiceRequired ? selectedTargetArcs.get(targetShipId) : undefined;
         if (option?.arcChoiceRequired && !arc) return;
-        const targetQuadrant = option?.flyby ? document.getElementById('flyby-quadrant')?.value : undefined;
+        const targetQuadrant = option?.flyby || (actor.weapons?.[activeWeapon]?.array && (weapons.get(activeWeapon) || []).some(o => o.flyby)) ? document.getElementById('flyby-quadrant')?.value : undefined;
         fireBtn.disabled = true;
         try {
             const response = await api(`/${roomCode}/fire`, { weaponIndex: activeWeapon, targetShipId, arc, targetQuadrant,

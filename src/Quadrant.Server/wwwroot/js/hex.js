@@ -328,6 +328,10 @@ class HexGrid {
         this.selectedGunneryTarget = sourceId && targetId ? { sourceId, targetId } : null;
         this.draw();
     }
+    setArrayGunneryTargets(sourceId, targetIds) {
+        this.selectedGunneryTarget = sourceId && targetIds.length ? { sourceId, targetIds } : null;
+        this.draw();
+    }
     // Translucent preview ship (helm move confirmation). Pass null to clear.
     setGhost(ghost) { this.ghost = ghost; this.draw(); }
     // Hex route of the previewed move, drawn as a line through hex centers. Pass null to clear.
@@ -405,8 +409,10 @@ class HexGrid {
         // Draw the active weapon's chosen target path behind ship markers.
         if (this.selectedGunneryTarget) {
             const source = this.ships.find(ship => ship.id === this.selectedGunneryTarget.sourceId);
-            const target = this.ships.find(ship => ship.id === this.selectedGunneryTarget.targetId);
-            if (source && target) {
+            const targets = this.selectedGunneryTarget.targetIds || [this.selectedGunneryTarget.targetId];
+            for (const targetId of targets) {
+                const target = this.ships.find(ship => ship.id === targetId);
+                if (!source || !target) continue;
                 const from = this._pixel(source.q, source.r);
                 const to = this._pixel(target.q, target.r);
                 ctx.save();

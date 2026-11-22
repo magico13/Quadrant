@@ -110,7 +110,7 @@ public class GameController : ControllerBase
             pendingStunt = engine.PendingStunt,
             freeAttack = engine.FreeAttackShipId is { } defenderId && state.GetShip(defenderId) is { } defender
                 ? new { defenderId, targetId = state.CurrentActor?.InstanceId,
-                    weapons = engine.GetFreeAttackWeapons().Select(i => new { index = i, name = defender.Weapons[i].Name, arc = defender.Weapons[i].Arc }),
+                    weapons = engine.GetFreeAttackWeapons().Select(i => new { index = i, name = defender.Weapons[i].Name, arc = defender.Weapons[i].Arc, array = defender.Weapons[i].Array, targets = engine.GetFreeArrayTargets(i) }),
                     gunners = defender.CrewRoles.Select((role, i) => (role, i)).Where(x => x.role == "Gunner")
                         .Select(x => new { index = x.i, bonus = defender.CrewBonus(x.i, "gunnery", "Gunner") }) }
                 : null,
@@ -228,6 +228,7 @@ public class GameController : ControllerBase
                         projectileSpeed = w.ProjectileSpeed,
                         limitedFireUses = w.LimitedFireUses,
                         broadArc = w.BroadArc,
+                        array = w.Array,
                         pointDefenseBonus = w.PointDefenseBonus,
                         usesRemaining = s.WeaponUsesRemaining[i]
                     };
@@ -434,7 +435,7 @@ public class GameController : ControllerBase
         if (weapon.Type != WeaponType.DirectFire || string.IsNullOrWhiteSpace(weapon.LinkedGroup)) return 1;
         int count = weapons.Count(candidate => candidate.Type == WeaponType.DirectFire &&
             candidate.LinkedGroup == weapon.LinkedGroup && candidate.Arc == weapon.Arc &&
-            candidate.BroadArc == weapon.BroadArc &&
+            candidate.BroadArc == weapon.BroadArc && candidate.Array == weapon.Array &&
             candidate.Name == weapon.Name && candidate.Damage == weapon.Damage &&
             candidate.MinRange == weapon.MinRange && candidate.RangeIncrement == weapon.RangeIncrement &&
             candidate.LimitedFireUses == weapon.LimitedFireUses);

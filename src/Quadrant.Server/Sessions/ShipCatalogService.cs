@@ -173,6 +173,7 @@ public class ShipCatalogService
                     Arc = ParseArc(wRef.Arc),
                     LinkedGroup = wRef.LinkedGroup,
                     BroadArc = wDef.Special.Any(s => string.Equals(s, "Broad Arc", StringComparison.OrdinalIgnoreCase)),
+                    Array = wDef.Special.Any(s => string.Equals(s, "Array", StringComparison.OrdinalIgnoreCase)),
                     PointDefenseBonus = ParsePointDefenseBonus(wDef.Special),
                     MinRange = wDef.MinRange,
                     RangeIncrement = wDef.RangeIncrement,

@@ -26,6 +26,53 @@ public class FlybyTests
     }
 
     [Fact]
+    public void ArrayFlybyHitsCrossedEnemyAtCloseRangeAndOtherShipsInArc()
+    {
+        var (_, state, original, enemy) = Create();
+        var array = new Weapon { Name = "Array", Arc = FiringArc.Forward, Array = true, RangeIncrement = 1, Damage = DamageExpression.From("3") };
+        var ship = (original.Definition with { Weapons = [array] }).Instantiate("a", original.Position, original.Facing, 0);
+        state.Ships[0] = ship;
+        var ally = original.Definition.Instantiate("ally", new Hex(5, 0), Facing.West, 0);
+        state.Ships.Add(ally);
+        var engine = new CombatEngine(state, new FixedDice(18));
+        Assert.True(engine.StartStunt("Flyby").IsValid);
+        Assert.True(engine.TryMoveTo(new Hex(4, 0), Facing.East).IsValid);
+        engine.SkipMove();
+        var options = engine.GetValidTargets();
+        Assert.Contains(options, o => o.TargetShipId == "b" && o.Flyby && o.Range == 1);
+        Assert.Contains(options, o => o.TargetShipId == "ally" && !o.Flyby);
+        Assert.Null(engine.ApplyFire(new FireAction(0, "b")));
+        Assert.NotNull(engine.ApplyFire(new FireAction(0, "b", Quadrant.Port)));
+        Assert.Equal(FiringArc.Forward, ship.FlybyFiringArc);
+        engine.AdvancePhase();
+        Assert.Equal(7, enemy.Shields.Port);
+        Assert.Equal(7, ally.Shields.Forward);
+    }
+
+    [Fact]
+    public void ArrayFreeAttackHitsMoverAftAndOtherShipsWithoutDivert()
+    {
+        var (_, state, mover, original) = Create(17);
+        var array = new Weapon { Name = "Array", Arc = FiringArc.Forward, Array = true, Damage = DamageExpression.From("1d6") };
+        var defender = (original.Definition with { Weapons = [array] }).Instantiate("b", original.Position, original.Facing, 1);
+        defender.DivertWeapons = true;
+        state.Ships[1] = defender;
+        var bystander = original.Definition.Instantiate("c", new Hex(0, 0), Facing.East, 1);
+        state.Ships.Add(bystander);
+        var engine = new CombatEngine(state, new FixedDice(17));
+        Assert.True(engine.StartStunt("Flyby").IsValid);
+        Assert.True(engine.TryMoveTo(new Hex(4, 0), Facing.East).IsValid);
+        Assert.Contains(0, engine.GetFreeAttackWeapons());
+        Assert.Null(engine.ResolveFreeAttack(0));
+        Assert.Equal(1, Assert.Single(mover.DamageReport).RawDamage);
+        Assert.Equal(Quadrant.Aft, Assert.Single(mover.DamageReport).Quadrant);
+        Assert.Equal(1, Assert.Single(bystander.DamageReport).RawDamage);
+        Assert.Contains(engine.LastEvents, e => e.Message.Contains("free attack") && e.Message.Contains("17+96=113"));
+        Assert.Empty(engine.CaptureSnapshot().FiredWeapons);
+        Assert.Equal(new Hex(4, 0), mover.Position);
+    }
+
+    [Fact]
     public void FreeAttackKeepsIntactArraysAvailableWhenAnotherArrayIsWrecked()
     {
         var (engine, _, _, enemy) = Create(17);
@@ -73,7 +120,7 @@ public class FlybyTests
     }
 
     [Fact]
-    public void DivertWeaponsAppliesToHelmFreeAttackDamage()
+    public void DivertWeaponsDoesNotApplyToHelmFreeAttackDamage()
     {
         var weapon = new Weapon { Name = "Cannon", Arc = FiringArc.Aft, Type = WeaponType.DirectFire,
             Damage = DamageExpression.From("1d6") };
@@ -97,7 +144,7 @@ public class FlybyTests
         Assert.True(engine.HasPendingFreeAttack);
         Assert.Null(engine.ResolveFreeAttack(0));
 
-        Assert.Equal(2, Assert.Single(attacker.DamageReport).RawDamage);
+        Assert.Equal(1, Assert.Single(attacker.DamageReport).RawDamage);
     }
 
     [Theory]
@@ -192,23 +239,17 @@ public class FlybyTests
     }
 
     [Fact]
-    public void FlybyPathsCannotCrossMultipleEnemyOccupiedSpaces()
+    public void FlybyCanCrossAnotherEnemyAndProvokesItsFreeAttack()
     {
         var (engine, state, ship, enemy) = Create();
         state.Ships.Add(enemy.Definition.Instantiate("c", new Hex(3, 0), Facing.West, 1));
         Assert.True(engine.StartStunt("Flyby").IsValid);
-        Assert.All(engine.GetValidMoves(), option =>
-        {
-            var crossings = option.Path.Zip(option.Path.Skip(1))
-                .Where(pair => pair.First.Position != pair.Second.Position)
-                .SelectMany(pair => state.Ships.Where(s => s.InstanceId != ship.InstanceId && s.Position == pair.Second.Position));
-            Assert.Single(crossings);
-        });
-        // With average maneuverability, this straight destination requires
-        // crossing both enemies and must not be offered.
-        Assert.False(engine.TryMoveTo(new Hex(4, 0), Facing.East).IsValid);
-        Assert.Null(ship.FlybyTargetId);
-        Assert.Empty(ship.CrewActionsUsed);
+        Assert.True(engine.TryMoveTo(new Hex(4, 0), Facing.East).IsValid);
+        Assert.Equal("b", ship.FlybyTargetId);
+        Assert.True(ship.FlybySucceeded);
+        Assert.Equal("c", engine.FreeAttackShipId);
+        Assert.Null(engine.ResolveFreeAttack(null));
+        Assert.Equal(new Hex(4, 0), ship.Position);
     }
 
     [Fact]

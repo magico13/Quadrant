@@ -18,6 +18,9 @@ public sealed record Weapon
     /// <summary>Can fire into either arc adjacent to its installed arc at a –2 penalty.</summary>
     public bool BroadArc { get; init; }
 
+    /// <summary>Attacks every ship in its firing arc with a shared damage roll.</summary>
+    public bool Array { get; init; }
+
     /// <summary>Point-defense gunnery bonus; zero when this is not a Point weapon.</summary>
     public int PointDefenseBonus { get; init; }
 

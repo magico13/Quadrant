@@ -19,6 +19,7 @@ function renderHelm() {
             <div class="hint">${actor.name} is passing through this ship. Choose a gunner and direct-fire weapon for a free attack against its aft shields, or pass.</div>
             <label>Gunner <select id="free-gunner">${attack.gunners.map((g, i) => `<option value="${g.index}">Gunner ${i + 1} (${g.bonus >= 0 ? '+' : ''}${g.bonus})</option>`).join('')}</select></label>
             <label>Weapon <select id="free-weapon">${attack.weapons.map(w => `<option value="${w.index}">${w.name} (${formatArc(w.arc)})</option>`).join('')}</select></label>
+            <div id="free-array-targets" class="hint"></div>
             <button class="btn btn-primary" id="btn-free-fire">Fire Free Attack</button>
             <button class="btn btn-ghost" id="btn-free-pass">Pass</button>`;
         async function resolveFreeAttack(fire) {
@@ -28,6 +29,14 @@ function renderHelm() {
                 await fetchState();
             } catch (err) { addLog('error', `Free attack failed: ${err.message}`); }
         }
+        const freeWeapon = document.getElementById('free-weapon');
+        function showFreeArrayTargets() {
+            const weapon = attack.weapons.find(w => w.index === Number(freeWeapon.value));
+            document.getElementById('free-array-targets').textContent = weapon?.array
+                ? `Array (−4) also attacks: ${weapon.targets.map(id => { const ship = state.ships.find(s => s.id === id); return `${ship?.name ?? id}${ship?.teamId === defender.teamId ? ' (ally)' : ''}`; }).join(', ')}.` : '';
+        }
+        freeWeapon.addEventListener('change', showFreeArrayTargets);
+        showFreeArrayTargets();
         document.getElementById('btn-free-fire').addEventListener('click', () => resolveFreeAttack(true));
         document.getElementById('btn-free-pass').addEventListener('click', () => resolveFreeAttack(false));
         return;
@@ -45,8 +54,7 @@ function renderHelm() {
     const facingNames = ['NW', 'NE', 'E', 'SE', 'SW', 'W'];
     const pending = pendingMove?.option;
     const flybyEnemy = state.pendingStunt === 'Flyby' && pending
-        ? state.ships.find(ship => ship.teamId !== actor.teamId && !ship.isDestroyed &&
-            pending.path?.some(step => step.q === ship.q && step.r === ship.r))
+        ? pending.path?.map(step => state.ships.find(ship => ship.teamId !== actor.teamId && !ship.isDestroyed && step.q === ship.q && step.r === ship.r)).find(Boolean)
         : null;
     actionPanel.innerHTML = `
         <div class="actor-name" style="color:${teamColor(actor.teamId)}">${actor.name}</div>
